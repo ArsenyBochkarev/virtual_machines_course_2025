@@ -119,7 +119,7 @@ double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
 int main() {
     const double line_threshold = 1.25;
     const double size_threshold = 1.25;
-    const double assoc_threshold = 1.25;
+    const double assoc_threshold = 1.5;
 
     const size_t max_test_bytes = 2 << 27;
     const size_t min_test_bytes = 1 << 10;
@@ -167,15 +167,17 @@ int main() {
     size_t assoc = 1;
     if (detected_L1 >= 1024) {
         double prev_t = 0;
-        for (size_t k = 1; k <= 64; ++k) {
-            double t = measure_conflicts(k, detected_L1 / sizeof(size_t));
+        double prev_k = 1;
+        for (size_t k = 1; k <= 64; k = (k >= 8) ? k*2 : k+1) {
+            double t = measure_conflicts(k, detected_L1);
             // std::cout << "k: " << k << ", time: " << t << "\n";
             if (k > 1 && t > prev_t * assoc_threshold) {
-                assoc = k-1;
+                assoc = prev_k;
                 break;
             }
             assoc = k;
             prev_t = t;
+            prev_k = k;
         }
     }
 
