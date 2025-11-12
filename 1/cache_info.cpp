@@ -2,6 +2,8 @@
 #include <bits/stdc++.h>
 #include <chrono>
 #include <vector>
+#include <cstdlib> // For rand() and srand()
+#include <ctime>   // For time()
 using namespace std::chrono;
 
 
@@ -13,7 +15,7 @@ using namespace std::chrono;
 // 3. Ассоциативность:
 //   - Массив цепочек индексов с шагом в размер L1. Постепенно увеличиваем число шагов по нему. Когда время начнёт скакать -- значит, вышли за степень ассоциативности
 
-static size_t constexpr page_size = size_t(4) * 1024 * 1024;
+static size_t constexpr page_size = size_t(4) * 1024;
 
 static inline uint64_t now_ns() {
     return duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count();
@@ -81,40 +83,25 @@ double measure_stride_time(size_t N, size_t stride, size_t bench_tries = 5) {
     return main_avg;
 }
 
-double measure_traverse_time(size_t N, size_t stride, size_t line_size, size_t bench_tries = 1) {
+double measure_traverse_time(size_t N, size_t stride, size_t bench_tries = 1) {
     size_t elements = N / sizeof(size_t);
     if (elements < 16)
         elements = 16;
+    alignas(page_size) size_t* a = new size_t[elements] ;
+    for (size_t i = 0; i < elements; ++i)
+        a[i] = (i + stride) % elements;
     std::vector<double> all_avg;
-
-    Element* head = new Element();
-    Element* current = head;
-    alignas(page_size) Element** nodes = new Element*[elements];
-    
-    nodes[0] = head;
-    for (size_t i = 1; i < elements; ++i) {
-        current->next = new Element();
-        current = current->next;
-        nodes[i] = current;
-    }
-    for (size_t i = 0; i < elements; ++i) {
-        size_t next_idx = (i + stride) % elements;
-        nodes[i]->next = nodes[next_idx];
-    }
 
     for (size_t benches = 0; benches < bench_tries; benches++) {
         volatile size_t idx = 0;
         uint64_t steps = 64 * 1024 * 1024;
-        volatile Element* runner = head;
-
         // Прогрев
         for (int i = 0; i < steps; i++)
-            runner = runner->next;
+            idx = a[idx];
 
-        runner = head;
         uint64_t t0 = now_ns();
         for (int i = 0; i < steps; i++)
-            runner = runner->next;
+            idx = a[idx];
         uint64_t t1 = now_ns();
 
         (void)idx;
@@ -124,10 +111,7 @@ double measure_traverse_time(size_t N, size_t stride, size_t line_size, size_t b
     }
     auto main_avg = std::accumulate(all_avg.begin(), all_avg.end(), 0.0) / double(bench_tries);
 
-    for (size_t i = 0; i < elements; ++i)
-        delete nodes[i];
-    delete[] nodes;
-
+    delete a;
     return main_avg;
 }
 
@@ -190,7 +174,7 @@ double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
 
 int main() {
     const double line_threshold = 1.5;
-    const double size_threshold = 1.25;
+    const double size_threshold = 1.35;
     const double assoc_threshold = 1.5;
 
     const size_t max_test_bytes = 2 << 27;
@@ -216,22 +200,51 @@ int main() {
     }
     std::cout << "Line size = " << detected_line * sizeof(size_t) << " bytes\n";
 
-    std::vector<std::pair<size_t, double>> size_times;
-    for (size_t size = min_test_bytes; size <= max_test_bytes; size *= 2) {
-        double t = measure_traverse_time(size, detected_line, detected_line);
-        size_times.emplace_back(size, t);
-    }
+    int counter = 0;
+    int max_bench_tries = 3;
+    size_t detected_L1 = 0;
+    while(!detected_L1) {
+        std::vector<size_t> tries;
+        // std::cout << "try number: " << counter << "\n";
+        for (int bench_num = 1; bench_num <= max_bench_tries; bench_num++) {
+            std::vector<std::pair<size_t, double>> size_times;
+            for (size_t size = min_test_bytes; size <= max_test_bytes; size *= 2) {
+                for (size_t step = 0; step < size; step += size / 4) {
+                    double t = measure_traverse_time(size + step, detected_line, 1);
+                    size_times.emplace_back(size + step, t);
+                    // std::cout << "size: " << size + step << ", time: " << t << "\n";
+                }
+            }
 
-    double base = size_times.front().second;
-    size_t detected_L1 = size_times.back().first;
-    for (size_t i = 1; i <= size_times.size(); ++i) {
-        double prev = size_times[i-1].second;
-        double cur  = size_times[i].second;
-        // std::cout << "size: " << size_times[i - 1].first << ", time: " << prev << ", avg_all_prev: " << avg_all_prev << "\n";
-        if (cur > prev * size_threshold) {
-            // std::cout << "size: " << size_times[i].first << ", time: " << cur << " <-- found\n";
-            detected_L1 = size_times[i-1].first;
-            break;
+            double base = size_times.front().second;
+            for (size_t i = 1; i <= size_times.size(); i++) {
+                double prev = size_times[i-1].second;
+                double cur  = size_times[i].second;
+                if (cur > prev * size_threshold) {
+                    tries.push_back(size_times[i-1].first);
+                    break;
+                }
+            }
+        }
+
+        counter++;
+        const int first_element = tries[0];
+        if (std::all_of(tries.begin(), tries.end(), [&](int x) { return x == first_element; }))
+            detected_L1 = first_element;
+        else if (counter >= 5) {
+            // Просто возьмём наиболее часто встречающийся элемент
+            int n = tries.size(), maxcount = 0;
+            for (int freq_i = 0; freq_i < n; freq_i++) {
+                int freq_count = 0;
+                for (int freq_j = 0; freq_j < n; freq_j++) {
+                    if (tries[freq_i] == tries[freq_j])
+                        freq_count++;
+                }
+                if (freq_count > maxcount) {
+                    maxcount = freq_count;
+                    detected_L1 = tries[freq_i];
+                }
+            }
         }
     }
     std::cout << "L1 size = " << detected_L1 << " bytes = " << detected_L1 / 1024 << "KiB\n";
@@ -240,7 +253,7 @@ int main() {
     if (detected_L1 >= 1024) {
         double prev_t = 0;
         double prev_k = 1;
-        for (size_t k = 1; k <= 64; k = (k >= 8) ? k*2 : k+1) {
+        for (size_t k = 1; k <= 32; k+1) {
             double t = measure_conflicts(k, detected_L1);
             // std::cout << "k: " << k << ", time: " << t << "\n";
             if (k > 1 && t > prev_t * assoc_threshold) {
@@ -252,8 +265,6 @@ int main() {
             prev_k = k;
         }
     }
-
-    // Вывод результатов
     std::cout << "Associativity = " << assoc << "\n";
 
     return 0;
