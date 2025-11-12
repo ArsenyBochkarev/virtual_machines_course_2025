@@ -19,23 +19,53 @@ static inline uint64_t now_ns() {
     return duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count();
 }
 
+struct Element {
+    Element *next = nullptr;
+    size_t data = 1;
+};
+
 double measure_stride_time(size_t N, size_t stride, size_t bench_tries = 5) {
     size_t elements = N / sizeof(size_t);
     if (elements < 16)
         elements = 16;
-    alignas(page_size) size_t* a = new size_t[elements] ;
-    for (size_t i = 0; i < elements; ++i)
-        a[i] = 1;
     std::vector<double> all_avg;
 
-    for (size_t benches = 0; benches < bench_tries; benches++) {
-        // Прогрев
-        for (size_t i = 0; i < elements; i += stride)
-            a[i] *= i;
+    Element* head = new Element();
+    Element* current = head;
+    alignas(page_size) Element** nodes = new Element*[elements];
 
+    nodes[0] = head;
+    for (size_t i = 1; i < elements; ++i) {
+        current->next = new Element();
+        current = current->next;
+        nodes[i] = current;
+    }
+    current = head;
+    for (size_t i = 0; i < elements; i += stride) {
+        if (i + stride < elements)
+            nodes[i]->next = nodes[i + stride]; 
+        else
+            nodes[i]->next = nullptr;
+    }
+
+    for (size_t benches = 0; benches < bench_tries; benches++) {
+        size_t counter = 1;
+        Element* runner = head;
+        // Прогрев
+        while (runner != nullptr) {
+            counter++;
+            runner->data *= counter;
+            runner = runner->next;
+        }
+
+        runner = head;
+        counter = 1;
         uint64_t t0 = now_ns();
-        for (size_t i = 0; i < elements; i += stride)
-            a[i] *= i;
+        while (runner != nullptr) {
+            counter++;
+            runner->data *= counter;
+            runner = runner->next;
+        }
         uint64_t t1 = now_ns();
 
         double avg_ns = double(t1 - t0); // Измеряем общее время
@@ -44,7 +74,14 @@ double measure_stride_time(size_t N, size_t stride, size_t bench_tries = 5) {
     }
     auto main_avg = std::accumulate(all_avg.begin(), all_avg.end(), 0.0) / double(bench_tries);
 
-    delete a;
+    current = head;
+    while (current) {
+        Element* next = current->next;
+        delete current;
+        current = next;
+    }
+    delete[] nodes;
+
     return main_avg;
 }
 
@@ -118,7 +155,7 @@ double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
 }
 
 int main() {
-    const double line_threshold = 1.25;
+    const double line_threshold = 1.5;
     const double size_threshold = 1.25;
     const double assoc_threshold = 1.5;
 
@@ -131,7 +168,7 @@ int main() {
     size_t prev_s = 1;
     for (size_t s = 1; s <= 1024; s = (s >= 8) ? s*2 : s+1) {
         double t = measure_stride_time(max_test_bytes, s);
-        // std::cout << "s: " << s << ", time: " << t << "\n";
+        // std::cout << "s: " << std::setw(2) << s << ", time:" << std::setw(11) << std::fixed << std::setprecision(0) << t << "\n";
         if (s == 1)
             prev_t = t;
         else {
