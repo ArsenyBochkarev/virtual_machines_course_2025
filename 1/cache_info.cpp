@@ -74,12 +74,8 @@ double measure_stride_time(size_t N, size_t stride, size_t bench_tries = 5) {
     }
     auto main_avg = std::accumulate(all_avg.begin(), all_avg.end(), 0.0) / double(bench_tries);
 
-    current = head;
-    while (current) {
-        Element* next = current->next;
-        delete current;
-        current = next;
-    }
+    for (size_t i = 0; i < elements; ++i)
+        delete nodes[i];
     delete[] nodes;
 
     return main_avg;
@@ -89,21 +85,36 @@ double measure_traverse_time(size_t N, size_t stride, size_t line_size, size_t b
     size_t elements = N / sizeof(size_t);
     if (elements < 16)
         elements = 16;
-    alignas(page_size) size_t* a = new size_t[elements] ;
-    for (size_t i = 0; i < elements; ++i)
-        a[i] = (i + stride) % elements;
     std::vector<double> all_avg;
+
+    Element* head = new Element();
+    Element* current = head;
+    alignas(page_size) Element** nodes = new Element*[elements];
+    
+    nodes[0] = head;
+    for (size_t i = 1; i < elements; ++i) {
+        current->next = new Element();
+        current = current->next;
+        nodes[i] = current;
+    }
+    for (size_t i = 0; i < elements; ++i) {
+        size_t next_idx = (i + stride) % elements;
+        nodes[i]->next = nodes[next_idx];
+    }
 
     for (size_t benches = 0; benches < bench_tries; benches++) {
         volatile size_t idx = 0;
         uint64_t steps = 64 * 1024 * 1024;
+        volatile Element* runner = head;
+
         // Прогрев
         for (int i = 0; i < steps; i++)
-            idx = a[idx];
+            runner = runner->next;
 
+        runner = head;
         uint64_t t0 = now_ns();
         for (int i = 0; i < steps; i++)
-            idx = a[idx];
+            runner = runner->next;
         uint64_t t1 = now_ns();
 
         (void)idx;
@@ -113,18 +124,38 @@ double measure_traverse_time(size_t N, size_t stride, size_t line_size, size_t b
     }
     auto main_avg = std::accumulate(all_avg.begin(), all_avg.end(), 0.0) / double(bench_tries);
 
-    delete a;
+    for (size_t i = 0; i < elements; ++i)
+        delete nodes[i];
+    delete[] nodes;
+
     return main_avg;
 }
 
 double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
     size_t elements = 64 * 1024 * 1024;
     alignas(page_size) size_t* a = new size_t[elements];
-    // Массив в виде цепочек индексов с шагом stride
     for (size_t i = 0, idx = 0; i < elements; ++i) {
         auto idx_prev = idx;
         idx = ((idx + stride) % elements) + ((idx + stride >= elements) ? 1 : 0);
         a[idx_prev] = idx;
+    }
+
+    Element* head = new Element();
+    Element* current = head;
+    alignas(page_size) Element** nodes = new Element*[elements];
+
+    nodes[0] = head;
+    for (size_t i = 1; i < elements; ++i) {
+        current->next = new Element();
+        current = current->next;
+        nodes[i] = current;
+    }
+    // Список в виде цепочек индексов с шагом stride
+    size_t idx = 0;
+    for (size_t i = 0; i < elements; ++i) {
+        size_t next_idx = ((idx + stride) % elements) + ((idx + stride >= elements) ? 1 : 0);
+        nodes[idx]->next = nodes[next_idx];
+        idx = next_idx;
     }
 
     size_t trials = 100;
@@ -132,16 +163,16 @@ double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
     for (size_t benches = 0; benches < bench_tries; benches++) {
         // Прогрев
         for (size_t j = 0; j < trials; j++) {
-            volatile size_t idx = 0;
+            volatile Element* runner = head;
             for (size_t i = 0; i < k; i++)
-                idx = a[idx];
+                runner = runner->next;
         }
 
         uint64_t t0 = now_ns();
         for (size_t j = 0; j < trials; j++) {
-            volatile size_t idx = 0;
+            volatile Element* runner = head;
             for (size_t i = 0; i < k; i++)
-                idx = a[idx];
+                runner = runner->next;
         }
         uint64_t t1 = now_ns();
 
@@ -150,7 +181,10 @@ double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
     }
     auto main_avg = std::accumulate(all_avg.begin(), all_avg.end(), 0.0) / double(bench_tries);
 
-    delete a;
+    for (size_t i = 0; i < elements; ++i)
+        delete nodes[i];
+    delete[] nodes;
+
     return main_avg;
 }
 
