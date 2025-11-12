@@ -13,6 +13,7 @@ using namespace std::chrono;
 // 3. Ассоциативность:
 //   - Массив цепочек индексов с шагом в размер L1. Постепенно увеличиваем число шагов по нему. Когда время начнёт скакать -- значит, вышли за степень ассоциативности
 
+static size_t constexpr page_size = size_t(4) * 1024 * 1024;
 
 static inline uint64_t now_ns() {
     return duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count();
@@ -22,7 +23,7 @@ double measure_stride_time(size_t N, size_t stride, size_t bench_tries = 5) {
     size_t elements = N / sizeof(size_t);
     if (elements < 16)
         elements = 16;
-    alignas(4096) size_t* a = new size_t[elements] ;
+    alignas(page_size) size_t* a = new size_t[elements] ;
     for (size_t i = 0; i < elements; ++i)
         a[i] = 1;
     std::vector<double> all_avg;
@@ -51,7 +52,7 @@ double measure_traverse_time(size_t N, size_t stride, size_t line_size, size_t b
     size_t elements = N / sizeof(size_t);
     if (elements < 16)
         elements = 16;
-    alignas(4096) size_t* a = new size_t[elements] ;
+    alignas(page_size) size_t* a = new size_t[elements] ;
     for (size_t i = 0; i < elements; ++i)
         a[i] = (i + stride) % elements;
     std::vector<double> all_avg;
@@ -81,7 +82,7 @@ double measure_traverse_time(size_t N, size_t stride, size_t line_size, size_t b
 
 double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
     size_t elements = 64 * 1024 * 1024;
-    alignas(4096) size_t* a = new size_t[elements];
+    alignas(page_size) size_t* a = new size_t[elements];
     // Массив в виде цепочек индексов с шагом stride
     for (size_t i = 0, idx = 0; i < elements; ++i) {
         auto idx_prev = idx;
