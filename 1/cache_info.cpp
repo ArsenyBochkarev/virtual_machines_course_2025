@@ -2,8 +2,7 @@
 #include <bits/stdc++.h>
 #include <chrono>
 #include <vector>
-#include <cstdlib> // For rand() and srand()
-#include <ctime>   // For time()
+
 using namespace std::chrono;
 
 
@@ -15,7 +14,7 @@ using namespace std::chrono;
 // 3. Ассоциативность:
 //   - Массив цепочек индексов с шагом в размер L1. Постепенно увеличиваем число шагов по нему. Когда время начнёт скакать -- значит, вышли за степень ассоциативности
 
-static size_t constexpr page_size = size_t(4) * 1024;
+static size_t constexpr page_size = 4096;
 
 static inline uint64_t now_ns() {
     return duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count();
@@ -99,6 +98,7 @@ double measure_traverse_time(size_t N, size_t stride, size_t bench_tries = 1) {
         for (int i = 0; i < steps; i++)
             idx = a[idx];
 
+        idx = 0;
         uint64_t t0 = now_ns();
         for (int i = 0; i < steps; i++)
             idx = a[idx];
@@ -253,7 +253,7 @@ int main() {
     if (detected_L1 >= 1024) {
         double prev_t = 0;
         double prev_k = 1;
-        for (size_t k = 1; k <= 32; k+1) {
+        for (size_t k = 1; k <= 32; (k < 8) ? k+=1 : k+=4) {
             double t = measure_conflicts(k, detected_L1);
             // std::cout << "k: " << k << ", time: " << t << "\n";
             if (k > 1 && t > prev_t * assoc_threshold) {
