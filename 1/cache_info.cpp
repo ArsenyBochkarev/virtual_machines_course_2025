@@ -2,7 +2,8 @@
 #include <bits/stdc++.h>
 #include <chrono>
 #include <vector>
-
+#include <numeric>
+#include <random>
 using namespace std::chrono;
 
 
@@ -31,27 +32,28 @@ double measure_stride_time(size_t N, size_t stride, size_t bench_tries = 5) {
         elements = 16;
     std::vector<double> all_avg;
 
-    Element* head = new Element();
-    Element* current = head;
-    alignas(page_size) Element** nodes = new Element*[elements];
-
-    nodes[0] = head;
-    for (size_t i = 1; i < elements; ++i) {
-        current->next = new Element();
-        current = current->next;
-        nodes[i] = current;
-    }
-    current = head;
-    for (size_t i = 0; i < elements; i += stride) {
-        if (i + stride < elements)
-            nodes[i]->next = nodes[i + stride]; 
-        else
-            nodes[i]->next = nullptr;
-    }
-
     for (size_t benches = 0; benches < bench_tries; benches++) {
+        // Подготовка буфера для обхода
+        Element* head = new Element();
+        Element* current = head;
+        alignas(page_size) Element** nodes = new Element*[elements];
+
+        nodes[0] = head;
+        for (size_t i = 1; i < elements; ++i) {
+            current->next = new Element();
+            current = current->next;
+            nodes[i] = current;
+        }
+        current = head;
+        for (size_t i = 0; i < elements; i += stride) {
+            if (i + stride < elements)
+                nodes[i]->next = nodes[i + stride]; 
+            else
+                nodes[i]->next = nullptr;
+        }
         size_t counter = 1;
         Element* runner = head;
+
         // Прогрев
         while (runner != nullptr) {
             counter++;
@@ -72,89 +74,97 @@ double measure_stride_time(size_t N, size_t stride, size_t bench_tries = 5) {
         double avg_ns = double(t1 - t0); // Измеряем общее время
                                          // Укладывающиеся в одну L1 cache line будут иметь примерно одинаковое время
         all_avg.push_back(avg_ns);
+
+        for (size_t i = 0; i < elements; ++i)
+            delete nodes[i];
+        delete[] nodes;
     }
     auto main_avg = std::accumulate(all_avg.begin(), all_avg.end(), 0.0) / double(bench_tries);
-
-    for (size_t i = 0; i < elements; ++i)
-        delete nodes[i];
-    delete[] nodes;
 
     return main_avg;
 }
 
-double measure_traverse_time(size_t N, size_t stride, size_t bench_tries = 1) {
-    size_t elements = N / sizeof(size_t);
-    if (elements < 16)
-        elements = 16;
-    alignas(page_size) size_t* a = new size_t[elements] ;
-    for (size_t i = 0; i < elements; ++i)
-        a[i] = (i + stride) % elements;
-    std::vector<double> all_avg;
+double measure_traverse_time(size_t N, size_t bench_tries = 1) {
+    std::random_device rd;
+    std::mt19937_64 rng(rd());
 
+    double avg_sum = 0.0;
+    const size_t trials = 64; 
+
+    size_t num_elements = N / sizeof(Element);
     for (size_t benches = 0; benches < bench_tries; benches++) {
-        volatile size_t idx = 0;
-        uint64_t steps = 64 * 1024 * 1024;
-        // Прогрев
-        for (int i = 0; i < steps; i++)
-            idx = a[idx];
+        // Подготовка буфера для обхода
+        auto a = static_cast<Element*>(aligned_alloc(page_size, N));
+        auto *cur = a;
 
-        idx = 0;
+        // Чтобы несколько элементов не выставили себе next в один и тот же
+        std::vector<size_t> indices(num_elements); 
+        size_t cur_idx = 0;
+        for (size_t i = 0; i < num_elements; ++i) {
+            indices[cur_idx] = i;
+            cur_idx++;
+        }
+        std::shuffle(indices.begin(), indices.end(), rng);
+        for (size_t i = 0; i < num_elements; i++) {
+            cur->next = a + indices[i];
+            cur = cur->next;
+        }
+        cur->next = a; // Чтобы избежать проверки на nullptr
+
+        // Прогрев
+        for (size_t j = 0; j < 4; j++) {
+            volatile Element* runner = a;
+            for (size_t i = 0; i < num_elements; ++i) {
+                runner = runner->next;
+            }
+        }
+
         uint64_t t0 = now_ns();
-        for (int i = 0; i < steps; i++)
-            idx = a[idx];
+        for (size_t j = 0; j < trials; j++) {
+            volatile Element* runner = a;
+            for (size_t i = 0; i < num_elements; i++) {
+                runner = runner->next;
+            }
+        }
         uint64_t t1 = now_ns();
 
-        (void)idx;
-        double avg_ns = double(t1 - t0) / double(steps); // Среднее время обращения к элементу массива
-                                                         // Если массив полностью помещается в кэш -- время будет похожее
-        all_avg.push_back(avg_ns);
-    }
-    auto main_avg = std::accumulate(all_avg.begin(), all_avg.end(), 0.0) / double(bench_tries);
+        double result = double(t1 - t0);
+        result /= double(num_elements * trials); // Среднее время обращения к элементу массива
+                                                 // Если массив полностью помещается в кэш -- время будет похожее
+        avg_sum += result;
 
-    delete a;
-    return main_avg;
+        free(a);
+    }
+
+    return avg_sum / double(bench_tries);
 }
 
 double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
-    size_t elements = 64 * 1024 * 1024;
-    alignas(page_size) size_t* a = new size_t[elements];
-    for (size_t i = 0, idx = 0; i < elements; ++i) {
-        auto idx_prev = idx;
-        idx = ((idx + stride) % elements) + ((idx + stride >= elements) ? 1 : 0);
-        a[idx_prev] = idx;
-    }
-
-    Element* head = new Element();
-    Element* current = head;
-    alignas(page_size) Element** nodes = new Element*[elements];
-
-    nodes[0] = head;
-    for (size_t i = 1; i < elements; ++i) {
-        current->next = new Element();
-        current = current->next;
-        nodes[i] = current;
-    }
-    // Список в виде цепочек индексов с шагом stride
-    size_t idx = 0;
-    for (size_t i = 0; i < elements; ++i) {
-        size_t next_idx = ((idx + stride) % elements) + ((idx + stride >= elements) ? 1 : 0);
-        nodes[idx]->next = nodes[next_idx];
-        idx = next_idx;
-    }
-
+    size_t N = 64 * 1024 * 1024;
+    size_t num_elements = N / sizeof(Element);
     size_t trials = 100;
     std::vector<double> all_avg;
+
     for (size_t benches = 0; benches < bench_tries; benches++) {
+        // Подготовка буфера для обхода
+        auto* a = static_cast<Element*>(aligned_alloc(page_size, N));
+        Element* current = a;
+        for (size_t i = 0, idx = 0; i < num_elements; ++i) {
+            idx = ((idx + stride) % num_elements) + ((idx + stride >= num_elements) ? 1 : 0);
+            current->next = a + idx;
+            current = current->next;
+        }
+
         // Прогрев
         for (size_t j = 0; j < trials; j++) {
-            volatile Element* runner = head;
+            volatile Element* runner = a;
             for (size_t i = 0; i < k; i++)
                 runner = runner->next;
         }
 
         uint64_t t0 = now_ns();
         for (size_t j = 0; j < trials; j++) {
-            volatile Element* runner = head;
+            volatile Element* runner = a;
             for (size_t i = 0; i < k; i++)
                 runner = runner->next;
         }
@@ -162,22 +172,20 @@ double measure_conflicts(size_t k, size_t stride, size_t bench_tries = 10) {
 
         double avg_ns = double(t1 - t0) / double(k * trials);
         all_avg.push_back(avg_ns);
+
+        free(a);
     }
     auto main_avg = std::accumulate(all_avg.begin(), all_avg.end(), 0.0) / double(bench_tries);
-
-    for (size_t i = 0; i < elements; ++i)
-        delete nodes[i];
-    delete[] nodes;
 
     return main_avg;
 }
 
 int main() {
     const double line_threshold = 1.5;
-    const double size_threshold = 1.35;
+    const double size_threshold = 1.5;
     const double assoc_threshold = 1.5;
 
-    const size_t max_test_bytes = 2 << 27;
+    size_t max_test_bytes = 2 << 27;
     const size_t min_test_bytes = 1 << 10;
 
     size_t detected_line = 1;
@@ -200,27 +208,28 @@ int main() {
     }
     std::cout << "Line size = " << detected_line * sizeof(size_t) << " bytes\n";
 
+    max_test_bytes = 2 << 20;
     int counter = 0;
-    int max_bench_tries = 3;
+    int max_bench_tries = 5;
     size_t detected_L1 = 0;
     while(!detected_L1) {
         std::vector<size_t> tries;
         // std::cout << "try number: " << counter << "\n";
         for (int bench_num = 1; bench_num <= max_bench_tries; bench_num++) {
+            // std::cout << "benchmark number: " << bench_num << "\n";
             std::vector<std::pair<size_t, double>> size_times;
             for (size_t size = min_test_bytes; size <= max_test_bytes; size *= 2) {
-                for (size_t step = 0; step < size; step += size / 4) {
-                    double t = measure_traverse_time(size + step, detected_line, 1);
+                for (size_t step = 0; step < size; step += size / 2) {
+                    double t = measure_traverse_time(size + step, 32);
                     size_times.emplace_back(size + step, t);
                     // std::cout << "size: " << size + step << ", time: " << t << "\n";
                 }
-            }
+            }        
 
-            double base = size_times.front().second;
             for (size_t i = 1; i <= size_times.size(); i++) {
                 double prev = size_times[i-1].second;
                 double cur  = size_times[i].second;
-                if (cur > prev * size_threshold) {
+                if (i > 3 && cur > prev * size_threshold) {
                     tries.push_back(size_times[i-1].first);
                     break;
                 }
@@ -228,11 +237,21 @@ int main() {
         }
 
         counter++;
-        const int first_element = tries[0];
-        if (std::all_of(tries.begin(), tries.end(), [&](int x) { return x == first_element; }))
-            detected_L1 = first_element;
-        else if (counter >= 5) {
-            // Просто возьмём наиболее часто встречающийся элемент
+        if (tries.empty()) {
+            // std::cout << "No threshold was exceeded, retrying...\n";
+            if (counter >= 5) {
+                // std::cout << "No threshold was exceeded after 5 tries \n";
+                detected_L1 = 0;
+                break;
+            }
+            continue;
+        }
+        // std::cout << "tries elements: \n";
+        // for (int tr = 0; tr < tries.size(); tr++) {
+        //     std::cout << "tries[i] = " << tries[tr] << "\n";
+        // }
+        if (tries.size() > max_bench_tries / 2) {
+            // Возьмём наиболее часто встречающийся элемент
             int n = tries.size(), maxcount = 0;
             for (int freq_i = 0; freq_i < n; freq_i++) {
                 int freq_count = 0;
