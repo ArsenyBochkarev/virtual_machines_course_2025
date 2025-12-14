@@ -1,1 +1,0 @@
-> lamai: /home/mexanobar/programming/Edu/ITMO/3_semester/vm/1/virtual_machines_course_2025/2/lamai.cpp:613: void interpret(bytefile*): Assertion `addr >= 0 && addr < cf->captured_vars.size() && "ST: captured index out of bounds"' failed.
