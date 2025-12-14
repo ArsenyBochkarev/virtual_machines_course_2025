@@ -59,7 +59,7 @@ test:
 	fi
 
 lamai: $(LAMAI_SRC)
-	@g++ -g -m32 -std=c++17 $(LAMAI_SRC) -o $(LAMAI)
+	@g++ -m32 -std=c++17 -O2 $(LAMAI_SRC) -o $(LAMAI)
 
 clean-regression:
 	@rm -f *.bc *.actual.log *.diff
