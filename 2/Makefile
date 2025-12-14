@@ -58,6 +58,28 @@ test:
 		echo "All tests passed!"; \
 	fi
 
+# TEST ONLY
+PERF_DIR=$(PWD)/test/performance
+PERF_LAMA_FILES := $(wildcard $(PERF_DIR)/*.lama)
+PERF_TESTS=$(sort $(basename $(PERF_LAMA_FILES)))
+
+performance: check-lama-runtime $(PERF_TESTS)
+
+check-lama-runtime:
+	@if [ -z "$(LAMA_RUNTIME)" ]; then \
+		echo "Please set LAMA_RUNTIME variable to execute performance test:" \
+		echo "export LAMA_RUNTIME=<path to Lama src>/runtime" \
+		exit 1; \
+	fi
+
+$(PERF_TESTS): %: %.lama
+	@echo "Recursive source-level interpreter:" $@
+	@LAMA=$(LAMA_RUNTIME) time -f "$@\t%U" $(LAMAC) -i $< < /dev/null
+	@echo "Recursive bytecode interpreter:" $@
+	@LAMA=$(LAMA_RUNTIME) time -f "$@\t%U" $(LAMAC) -s $< < /dev/null
+	@echo "Iterative bytecode interpreter:" $@
+	@LAMA=$(LAMA_RUNTIME) && cd $(PERF_DIR) && $(LAMAC) -b $< && time -f "$@\t%U" $(LAMAI) $@.bc && rm $@.bc
+
 lamai: $(LAMAI_SRC)
 	@g++ -m32 -std=c++17 -O2 $(LAMAI_SRC) -o $(LAMAI)
 
