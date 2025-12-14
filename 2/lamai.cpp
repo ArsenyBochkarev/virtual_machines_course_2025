@@ -43,7 +43,6 @@ int get_public_offset(bytefile *f, int i) {
 static int code_size = -1;
 
 /* Reads a binary bytecode file by name and unpacks it */
-// TODO: Diagnose errors properly (from byterun.c)
 bytefile* read_file(char *fname) {
     FILE *f = fopen (fname, "rb");
     long size;
@@ -88,23 +87,7 @@ bytefile* read_file(char *fname) {
     return file;
 }
 
-struct SExpr;
-struct ValueWrapper;
-struct Array;
-struct Closure;
-
-using StringPtr = std::shared_ptr<std::string>;
-using ArrayPtr = std::shared_ptr<Array>;
-using SExprPtr = std::shared_ptr<SExpr>;
-
-using Value = std::variant<
-    std::monostate,
-    int32_t,
-    StringPtr,
-    ValueWrapper,
-    ArrayPtr,
-    SExprPtr,
-    Closure>;
+struct Value;
 
 struct SExpr {
     std::string tag;
@@ -122,99 +105,99 @@ struct Closure {
     int32_t code_offset;
 };
 
-static inline bool is_integer(const Value& v) {
-    return std::holds_alternative<int32_t>(v);
-}
-static inline int32_t get_integer(const Value& v) {
-    return std::get<int32_t>(v);
-}
+using StringPtr = std::shared_ptr<std::string>;
+using ArrayPtr = std::shared_ptr<Array>;
+using SExprPtr = std::shared_ptr<SExpr>;
 
-static inline bool is_sexpr(const Value& v) {
-    return std::holds_alternative<SExprPtr>(v);
-}
-static inline SExprPtr get_sexpr(const Value& v) {
-    return std::get<SExprPtr>(v);
-}
+struct Value {
+private:
+    std::variant<std::monostate, int32_t, StringPtr, ValueWrapper, ArrayPtr, SExprPtr, Closure> data;
 
-static inline bool is_string(const Value& v) {
-    return std::holds_alternative<StringPtr>(v);
-}
-static inline StringPtr get_string_ptr(const Value& v) {
-    return std::get<StringPtr>(v);
-}
+public:
+    Value() : data(std::monostate{}) {}
+    Value(std::monostate) : data(std::monostate{}) {}
+    Value(int32_t v) : data(v) {}
+    Value(const StringPtr& v) : data(v) {}
+    Value(ValueWrapper v) : data(v) {}
+    Value(const ArrayPtr& v) : data(v) {}
+    Value(const SExprPtr& v) : data(v) {}
+    Value(const Closure& v) : data(v) {}
 
-static inline bool is_reference(const Value& v) {
-    return std::holds_alternative<ValueWrapper>(v);
-}
-static inline Value* get_reference(const Value& v) {
-    return std::get<ValueWrapper>(v).data;
-}
+    bool is_integer() const { return std::holds_alternative<int32_t>(data); }
+    bool is_string() const { return std::holds_alternative<StringPtr>(data); }
+    bool is_reference() const { return std::holds_alternative<ValueWrapper>(data); }
+    bool is_array() const { return std::holds_alternative<ArrayPtr>(data); }
+    bool is_sexpr() const { return std::holds_alternative<SExprPtr>(data); }
+    bool is_closure() const { return std::holds_alternative<Closure>(data); }
+    bool is_aggregate() const { return is_sexpr() || is_array() || is_string(); }
+    bool is_empty() const { return std::holds_alternative<std::monostate>(data); }
 
-static inline bool is_array(const Value& v) {
-    return std::holds_alternative<ArrayPtr>(v);
-}
-static inline ArrayPtr get_array(const Value& v) {
-    return std::get<ArrayPtr>(v);
-}
+    int32_t as_integer() const { 
+        return std::get<int32_t>(data); 
+    }
+    StringPtr as_string_ptr() const { 
+        return std::get<StringPtr>(data); 
+    }
+    Value* as_reference() const { 
+        return std::get<ValueWrapper>(data).data; 
+    }
+    ArrayPtr as_array_ptr() const { 
+        return std::get<ArrayPtr>(data); 
+    }
+    SExprPtr as_sexpr_ptr() const { 
+        return std::get<SExprPtr>(data); 
+    }
+    Closure as_closure() const { 
+        return std::get<Closure>(data); 
+    }
 
-static inline bool is_aggregate(const Value& v) {
-    return is_sexpr(v) || is_array(v) || is_string(v);
-}
+    std::string to_string() const {
+        if (std::holds_alternative<std::monostate>(data))
+            return "()";
+        else if (is_integer())
+            return std::to_string(as_integer());
+        else if (is_string())
+            return "\"" + *as_string_ptr() + "\"";
+        else if (is_sexpr()) {
+            SExpr sexpr = *as_sexpr_ptr();
+            if (sexpr.elements.empty())
+                return sexpr.tag; // Nil should have no parentheses
 
-static inline bool is_closure(const Value& v) {
-    return std::holds_alternative<Closure>(v);
-}
-static inline Closure get_closure(const Value& v) {
-    return std::get<Closure>(v);
-}
+            std::string result = sexpr.tag + " (";
+            for (size_t i = 0; i < sexpr.elements.size(); i++) {
+                if (i > 0)
+                    result += ", ";
+                result += sexpr.elements[i].to_string();
+            }
+            result += ")";
+            return result;
+        } else if (is_array()) {
+            Array arr = *as_array_ptr();
+            std::string result = "[";
+            for (size_t i = 0; i < arr.elements.size(); i++) {
+                if (i > 0)
+                    result += ", ";
+                result += arr.elements[i].to_string();
+            }
+            result += "]";
+            return result;
+        } else if (is_reference())
+            return "&" + as_reference()->to_string();
 
-std::string value_to_string(const Value& v) {
-    if (std::holds_alternative<std::monostate>(v))
-        return "()";
-    else if (is_integer(v))
-        return std::to_string(get_integer(v));
-    else if (is_string(v))
-        return "\"" + *get_string_ptr(v) + "\"";
-    else if (is_sexpr(v)) {
-        SExpr sexpr = *get_sexpr(v);
-        if (sexpr.elements.empty())
-            return sexpr.tag; // Nil should have no parentheses
-
-        std::string result = sexpr.tag + " (";
-        for (size_t i = 0; i < sexpr.elements.size(); i++) {
-            if (i > 0)
-                result += ", ";
-            result += value_to_string(sexpr.elements[i]);
-        }
-        result += ")";
-        return result;
-    } else if (is_array(v)) {
-        Array arr = *get_array(v);
-        std::string result = "[";
-        for (size_t i = 0; i < arr.elements.size(); i++) {
-            if (i > 0)
-                result += ", ";
-            result += value_to_string(arr.elements[i]);
-        }
-        result += "]";
-        return result;
-    } else if (is_reference(v))
-        return "&" + value_to_string(*get_reference(v));
-
-    assert(false && "unknown value");
-}
+        assert(false && "unknown value");
+    }
+};
 
 struct Frame {
     std::vector<Value> locals;
     std::vector<Value> saved_args;
     std::shared_ptr<std::vector<Value>> captured_vars;
-    bool is_closure;
     int32_t arg_count;
     int32_t local_count;
     int32_t return_address;
 
-    Frame(int32_t args, int32_t locals_cnt, bool is_frame_closure = false) 
-        : arg_count(args), local_count(locals_cnt), return_address(-1), is_closure(is_frame_closure) {
+    Frame(int32_t args, int32_t locals_cnt) 
+        : arg_count(args), local_count(locals_cnt), return_address(-1) {
         locals.resize(args + locals_cnt);
     }
 
@@ -236,7 +219,6 @@ struct Frame {
     Value get_local(int32_t index) {
         return locals[arg_count + index];
     }
-
     Value* get_local_ptr(int32_t index) {
         return &locals[arg_count + index];
     }
@@ -259,7 +241,7 @@ struct Frame {
     }
 };
 
-typedef struct {
+struct VMState {
     std::stack<Value> stack;
     std::vector<Value> locals;
     std::vector<Value> globals;
@@ -267,36 +249,36 @@ typedef struct {
     int ip;
     int current_line;
     std::shared_ptr<std::vector<Value>> temp_captured;
-} VMState;
 
-static inline void push(VMState *vm, Value v) {
-    vm->stack.push(v);
-}
+    inline void push(const Value &v) {
+        stack.push(v);
+    }
+    inline Value pop() {
+        auto tmp = stack.top();
+        stack.pop();
+        return tmp;
+    }
 
-static inline Value pop(VMState *vm) {
-    auto tmp = vm->stack.top();
-    vm->stack.pop();
-    return tmp;
-}
+    inline Value get_global(int idx) const {
+        return globals[idx];
+    }
+    inline Value* get_global_ptr(int idx) {
+        return &globals[idx];
+    }
 
-static inline Value get_global(VMState *vm, int idx) {
-    return vm->globals[idx];
-}
-static inline Value* get_global_ptr(VMState *vm, int idx) {
-    return &vm->globals[idx];
-}
+    inline void get_int_from_code(int32_t *v, char* code) {
+        std::memcpy(v, code + ip, sizeof(int32_t));
+        ip += sizeof(int32_t);
+    }
+    inline void get_char_from_code(int8_t *v, char* code) {
+        std::memcpy(v, code + ip, sizeof(int8_t));
+        ip += sizeof(int8_t);
+    }
 
-static inline void get_int_from_code(int32_t *v, char *code, int ip) {
-    std::memcpy(v, code + ip, sizeof(int32_t));
-}
-
-static inline void get_char_from_code(int8_t *v, char *code, int ip) {
-    std::memcpy(v, code + ip, sizeof(int8_t));
-}
-
-static inline Frame *get_current_frame(VMState *vm) {
-    return vm->frames.empty() ? nullptr : &vm->frames.top();
-}
+    inline Frame *get_current_frame() {
+        return frames.empty() ? nullptr : &frames.top();
+    }
+};
 
 void interpret(bytefile *bf) {
     VMState vm;
@@ -316,22 +298,22 @@ void interpret(bytefile *bf) {
             case 0: { // BINOP
                 // std::cout << "BINOP\n";
                 int32_t res;
-                Value b = pop(&vm);
-                Value a = pop(&vm);
+                Value b = vm.pop();
+                Value a = vm.pop();
                 if (low == 10) {
-                    assert(is_integer(b) || is_integer(a) && "one of the operands must be integer");
-                    if (is_integer(a) && is_integer(b)) {
-                        int32_t b_int = get_integer(b);
-                        int32_t a_int = get_integer(a);
+                    assert(b.is_integer() || a.is_integer() && "one of the operands must be integer");
+                    if (a.is_integer() && b.is_integer()) {
+                        int32_t b_int = b.as_integer();
+                        int32_t a_int = a.as_integer();
                         res = (a_int == b_int);
                     } else res = 0; // Integers are never equal to values of other types
-                    push(&vm, res);
+                    vm.push(res);
                     break;
                 }
-                assert(is_integer(b) && "operand must be integer");
-                int32_t b_int = get_integer(b);
-                assert(is_integer(a) && "operand must be integer");
-                int32_t a_int = get_integer(a);
+                assert(b.is_integer() && "operand must be integer");
+                int32_t b_int = b.as_integer();
+                assert(a.is_integer() && "operand must be integer");
+                int32_t a_int = a.as_integer();
 
                 switch (low) {
                     case 1: { // ADD
@@ -390,7 +372,7 @@ void interpret(bytefile *bf) {
                         res = (a_int || b_int);
                         break;
                 }
-                push(&vm, res);
+                vm.push(res);
                 break;
             }
 
@@ -399,35 +381,31 @@ void interpret(bytefile *bf) {
                     case 0: { // CONST
                         // std::cout << "CONST\n";
                         int32_t constant;
-                        get_int_from_code(&constant, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
-                        push(&vm, Value{constant});
+                        vm.get_int_from_code(&constant, code);
+                        vm.push(Value{constant});
                         break;
                     }
                     case 1: { // STRING
                         // std::cout << "STRING\n";
                         int32_t string_index;
-                        get_int_from_code(&string_index, code, vm.ip); // Get string index from stack
+                        vm.get_int_from_code(&string_index, code); // Get string index from stack
                         std::string str = get_string(bf, string_index);
-                        vm.ip += sizeof(int32_t);
-                        push(&vm, Value{std::make_shared<std::string>(str)});
+                        vm.push(Value{std::make_shared<std::string>(str)});
                         break;
                     }
                     case 2: { // SEXP
                         // std::cout << "SEXP\n";
                         int32_t tag_index;
-                        get_int_from_code(&tag_index, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&tag_index, code);
                         int32_t elem_count;
-                        get_int_from_code(&elem_count, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&elem_count, code);
 
                         std::string tag = get_string(bf, tag_index);
     
                         // Getting elements from stack
                         std::vector<Value> elements;
                         for (int i = 0; i < elem_count; i++)
-                            elements.push_back(pop(&vm));
+                            elements.push_back(vm.pop());
                         std::reverse(elements.begin(), elements.end());
 
                         vm.stack.push(Value{std::make_shared<SExpr>(SExpr{tag, elements})});
@@ -435,52 +413,51 @@ void interpret(bytefile *bf) {
                     }
                     case 3: { // STI
                         // std::cout << "STI\n";
-                        Value ref = pop(&vm);
-                        assert(is_reference(ref) && "STI: argument should be reference");
-                        Value* ref_ptr = get_reference(ref);
-                        Value val = pop(&vm);
+                        Value ref = vm.pop();
+                        assert(ref.is_reference() && "STI: argument should be reference");
+                        Value* ref_ptr = ref.as_reference();
+                        Value val = vm.pop();
                         *ref_ptr = val;
 
-                        push(&vm, val);
+                        vm.push(val);
                         break;
                     }
                     case 4: { // STA
                         // std::cout << "STA\n";
-                        Value val = pop(&vm);
-                        Value idx_val = pop(&vm);
-                        if(is_integer(idx_val)) {
-                            int32_t idx = get_integer(idx_val);
-                            Value agg = pop(&vm);
-                            assert(is_aggregate(agg) && "STA: non-aggregate argument");
+                        Value val = vm.pop();
+                        Value idx_val = vm.pop();
+                        if(idx_val.is_integer()) {
+                            int32_t idx = idx_val.as_integer();
+                            Value agg = vm.pop();
+                            assert(agg.is_aggregate() && "STA: non-aggregate argument");
 
-                            if (is_string(agg)) {
-                                assert(is_integer(val) && "STA: value must be integer for string");
-                                StringPtr str_ptr = get_string_ptr(agg);
+                            if (agg.is_string()) {
+                                assert(val.is_integer() && "STA: value must be integer for string");
+                                StringPtr str_ptr = agg.as_string_ptr();
                                 assert(idx >= 0 && idx < str_ptr->size() && "STA: string index out of bounds");
-                                int32_t char_code = get_integer(val);
+                                int32_t char_code = val.as_integer();
                                 (*str_ptr)[idx] = static_cast<char>(char_code);
-                            } else if (is_array(agg)) {
-                                ArrayPtr arr_ptr = get_array(agg);
+                            } else if (agg.is_array()) {
+                                ArrayPtr arr_ptr = agg.as_array_ptr();
                                 assert(idx >= 0 && idx < arr_ptr->elements.size() && "STA: array index out of bounds");
                                 arr_ptr->elements[idx] = val;
                             } else {
-                                SExprPtr sexpr_ptr = get_sexpr(agg);
+                                SExprPtr sexpr_ptr = agg.as_sexpr_ptr();
                                 assert(idx >= 0 && idx < sexpr_ptr->elements.size() && "STA: S-expression index out of bounds");
                                 sexpr_ptr->elements[idx] = val; 
                             }
                         } else {
-                            assert(is_reference(idx_val) && "STA: second operand should be reference");
-                            Value* ref_ptr = get_reference(idx_val);
+                            assert(idx_val.is_reference() && "STA: second operand should be reference");
+                            Value* ref_ptr = idx_val.as_reference();
                             *ref_ptr = val;
                         }
-                        push(&vm, val);
+                        vm.push(val);
                         break;
                     }
                     case 5: { // JMP
                         // std::cout << "JMP\n";
                         int32_t loc;
-                        get_int_from_code(&loc, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&loc, code);
                         assert(loc <= code_size && "incorrect jump destination");
                         vm.ip = loc;
                         break;
@@ -488,54 +465,54 @@ void interpret(bytefile *bf) {
                     case 6:
                     case 7: { // END, RET
                         // std::cout << "END, RET\n";
-                        Value ret_val = pop(&vm); // Not really necessary, but do this just to support the format
+                        Value ret_val = vm.pop(); // Not really necessary, but do this just to support the format
                         vm.frames.pop();
                         if (vm.frames.empty())
                             return;
 
-                        Frame* caller_frame = get_current_frame(&vm);
+                        Frame* caller_frame = vm.get_current_frame();
                         vm.ip = caller_frame->return_address;
-                        push(&vm, ret_val); // TODO: remove this and `pop` above if we need some acceleration
+                        vm.push(ret_val); // TODO: remove this and `pop` above if we need some acceleration
                         break;
                     }
                     case 8: // DROP
                         // std::cout << "DROP\n";
-                        pop(&vm);
+                        vm.pop();
                         break;
                     case 9: { // DUP
                         // std::cout << "DUP\n";
                         Value v = vm.stack.top();
-                        push(&vm, v);
+                        vm.push(v);
                         break;
                     }
                     case 10: { // SWAP
                         // std::cout << "SWAP\n";
-                        Value a = pop(&vm);
-                        Value b = pop(&vm);
-                        push(&vm, b);
-                        push(&vm, a);
+                        Value a = vm.pop();
+                        Value b = vm.pop();
+                        vm.push(b);
+                        vm.push(a);
                         break;
                     }
                     case 11: { // ELEM
                         // std::cout << "ELEM\n";
-                        Value index = pop(&vm);
-                        assert(is_integer(index) && "Element's index must be integer");
-                        int32_t idx = get_integer(index);
-                        Value agg = pop(&vm);
-                        assert(is_aggregate(agg) && "Aggregate must be string, SExpr, or an Array");
+                        Value index = vm.pop();
+                        assert(index.is_integer() && "Element's index must be integer");
+                        int32_t idx = index.as_integer();
+                        Value agg = vm.pop();
+                        assert(agg.is_aggregate() && "Aggregate must be string, SExpr, or an Array");
 
-                        if (is_sexpr(agg)) {
-                            SExprPtr sexpr_ptr = get_sexpr(agg);
+                        if (agg.is_sexpr()) {
+                            SExprPtr sexpr_ptr = agg.as_sexpr_ptr();
                             assert(idx < sexpr_ptr->elements.size() && "Element index is greater than elements size");
-                            push(&vm, sexpr_ptr->elements[idx]);
-                        } else if (is_array(agg)) {
-                            ArrayPtr arr_ptr = get_array(agg);
+                            vm.push(sexpr_ptr->elements[idx]);
+                        } else if (agg.is_array()) {
+                            ArrayPtr arr_ptr = agg.as_array_ptr();
                             assert(idx < arr_ptr->elements.size() && "Element index is greater than elements size");
-                            push(&vm, arr_ptr->elements[idx]);
-                        } else if (is_string(agg)) {
-                            StringPtr str_ptr = get_string_ptr(agg);
+                            vm.push(arr_ptr->elements[idx]);
+                        } else if (agg.is_string()) {
+                            StringPtr str_ptr = agg.as_string_ptr();
                             assert(idx < str_ptr->size() && "Element index is greater than string's size");
-                            push(&vm, Value{static_cast<int32_t>((*str_ptr)[idx])});
+                            vm.push(Value{static_cast<int32_t>((*str_ptr)[idx])});
                         }
                         break;
                     }
@@ -547,15 +524,14 @@ void interpret(bytefile *bf) {
                 // LD, LDA
                 // std::cout << "LD, LDA\n";
                 int addr;
-                get_int_from_code(&addr, code, vm.ip);
-                vm.ip += sizeof(int32_t);
+                vm.get_int_from_code(&addr, code);
 
-                Frame *cf = get_current_frame(&vm);
+                Frame *cf = vm.get_current_frame();
                 Value *target;
                 switch (low) {
                     case 0: { // G(addr)
                         assert(addr >= 0 && addr < vm.globals.size() && "LD/LDA: global index out of bounds");
-                        target = get_global_ptr(&vm, addr);
+                        target = vm.get_global_ptr(addr);
                         break;
                     }
                     case 1: { // L(addr)
@@ -578,18 +554,17 @@ void interpret(bytefile *bf) {
                 }
 
                 if (high == 2) // LD
-                    push(&vm, *target);
+                    vm.push(*target);
                 else // LDA
-                    push(&vm, Value{ValueWrapper{target}}); // We should push a reference here
+                    vm.push(Value{ValueWrapper{target}}); // We should push a reference here
                 break;
             }
 
             case 4: { // ST
                 // std::cout << "ST\n";
-                Value v = pop(&vm);
+                Value v = vm.pop();
                 int32_t addr;
-                get_int_from_code(&addr, code, vm.ip);
-                vm.ip += sizeof(int32_t);
+                vm.get_int_from_code(&addr, code);
 
                 switch (low) {
                     case 0: { // G(addr)
@@ -598,19 +573,19 @@ void interpret(bytefile *bf) {
                         break;
                     }
                     case 1: { // L(addr)
-                        Frame *cf = get_current_frame(&vm);
+                        Frame *cf = vm.get_current_frame();
                         assert(addr >= 0 && addr < cf->local_count && "ST: local index out of bounds");
                         cf->set_local(addr, v);
                         break;
                     }
                     case 2: { // A(addr)
-                        Frame *cf = get_current_frame(&vm);
+                        Frame *cf = vm.get_current_frame();
                         assert(addr >= 0 && addr < cf->arg_count && "ST: argument index out of bounds");
                         cf->set_arg(addr, v);
                         break;
                     }
                     case 3: {
-                        Frame *cf = get_current_frame(&vm);
+                        Frame *cf = vm.get_current_frame();
                         assert(addr >= 0 && addr < cf->captured_vars->size() && "ST: captured index out of bounds");
                         cf->set_captured(addr, v);
                         break;
@@ -618,7 +593,7 @@ void interpret(bytefile *bf) {
                     default:
                         assert(false && "ST: unknown addressing mode");
                 }
-                push(&vm, v);
+                vm.push(v);
                 break;
             }
             case 5:
@@ -627,12 +602,11 @@ void interpret(bytefile *bf) {
                     case 1: { // CJMPz, CJMPnz
                         // std::cout << "CJMPz, CJMPnz\n";
                         int32_t loc;
-                        get_int_from_code(&loc, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&loc, code);
 
-                        Value cond = pop(&vm);
-                        assert(is_integer(cond) && "CJMPz/CJMPnz argument should be integer");
-                        int32_t int_cond = get_integer(cond);
+                        Value cond = vm.pop();
+                        assert(cond.is_integer() && "CJMPz/CJMPnz argument should be integer");
+                        int32_t int_cond = cond.as_integer();
                         if ((low == 0 && int_cond == 0) || (low == 1 && int_cond != 0)) {
                             assert(loc <= code_size && "incorrect jump destination");
                             vm.ip = loc;
@@ -642,14 +616,12 @@ void interpret(bytefile *bf) {
                     case 2:
                     case 3: { // BEGIN, CBEGIN
                         int32_t arg_count;
-                        get_int_from_code(&arg_count, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&arg_count, code);
                         int32_t local_count;
-                        get_int_from_code(&local_count, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&local_count, code);
 
-                        Frame *prev_frame = get_current_frame(&vm);
-                        Frame new_frame(arg_count, local_count, /*is_frame_closure=*/low == 3);
+                        Frame *prev_frame = vm.get_current_frame();
+                        Frame new_frame(arg_count, local_count);
                         if (prev_frame) {
                             assert(arg_count == prev_frame->saved_args.size() && "saved args length != arg_count");
                             for (int i = 0; i < arg_count; i++)
@@ -672,28 +644,23 @@ void interpret(bytefile *bf) {
                     case 4: { // CLOSURE
                         // // std::cout << "CLOSURE\n";
                         int32_t target;
-                        get_int_from_code(&target, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
-
+                        vm.get_int_from_code(&target, code);
                         int32_t n;
-                        get_int_from_code(&n, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&n, code);
 
                         std::shared_ptr<std::vector<Value>> captured_vars = std::make_shared<std::vector<Value>>();
                         for (int i = 0; i < n; i++) {
                             int8_t type;
-                            get_char_from_code(&type, code, vm.ip);
-                            vm.ip += sizeof(int8_t); // G: 00, L: 01, A: 02, C: 03
+                            vm.get_char_from_code(&type, code); // G: 00, L: 01, A: 02, C: 03
 
                             int32_t addr;
-                            get_int_from_code(&addr, code, vm.ip);
-                            vm.ip += sizeof(int32_t);
+                            vm.get_int_from_code(&addr, code);
 
-                            Frame *cf = get_current_frame(&vm);
+                            Frame *cf = vm.get_current_frame();
                             Value v;
                             switch (type) {
                                 case 0: // G(addr)
-                                    v = get_global(&vm, addr);
+                                    v = vm.get_global(addr);
                                     break;
                                 case 1: // L(addr)
                                     v = cf->get_local(addr);
@@ -710,26 +677,25 @@ void interpret(bytefile *bf) {
                             captured_vars->push_back(v);
                         }
                         Value c(Closure(captured_vars, target));
-                        push(&vm, c);
+                        vm.push(c);
                         break;
                     }
                     case 5: { // CALLC
                         // std::cout << "CALLC\n";
                         int32_t n;
-                        get_int_from_code(&n, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&n, code);
 
-                        Frame *current_frame = get_current_frame(&vm);
+                        Frame *current_frame = vm.get_current_frame();
                         current_frame->return_address = vm.ip;
 
                         current_frame->saved_args.clear();
                         for (int i = 0; i < n; i++)
-                            current_frame->save_arg(pop(&vm));
+                            current_frame->save_arg(vm.pop());
                         std::reverse(current_frame->saved_args.begin(), current_frame->saved_args.end());
 
-                        Value closure_val = pop(&vm);
-                        assert(is_closure(closure_val) && "first argument to CALLC must be closure");
-                        Closure closure = get_closure(closure_val);
+                        Value closure_val = vm.pop();
+                        assert(closure_val.is_closure() && "first argument to CALLC must be closure");
+                        Closure closure = closure_val.as_closure();
 
                         // Also save captured variables created in CLOSURE bytecode
                         vm.temp_captured = closure.captured;
@@ -748,18 +714,16 @@ void interpret(bytefile *bf) {
                     case 6: { // CALL
                         // std::cout << "CALL\n";
                         int32_t target;
-                        get_int_from_code(&target, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&target, code);
                         int32_t n;
-                        get_int_from_code(&n, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&n, code);
 
-                        Frame *current_frame = get_current_frame(&vm);
+                        Frame *current_frame = vm.get_current_frame();
                         current_frame->return_address = vm.ip;
 
                         current_frame->saved_args.clear();
                         for (int i = 0; i < n; i++)
-                            current_frame->save_arg(pop(&vm));
+                            current_frame->save_arg(vm.pop());
                         std::reverse(current_frame->saved_args.begin(), current_frame->saved_args.end());
 
                         // Do a JMP, basically
@@ -775,54 +739,49 @@ void interpret(bytefile *bf) {
                     case 7: { // TAG
                         // std::cout << "TAG\n";
                         int32_t tag_index;
-                        get_int_from_code(&tag_index, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&tag_index, code);
 
                         int32_t expected_elem_count;
-                        get_int_from_code(&expected_elem_count, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&expected_elem_count, code);
 
                         int32_t result = 0;
-                        Value tested_val = pop(&vm);
-                        if (is_sexpr(tested_val)) {
-                            SExpr sexpr = *get_sexpr(tested_val);
+                        Value tested_val = vm.pop();
+                        if (tested_val.is_sexpr()) {
+                            SExpr sexpr = *tested_val.as_sexpr_ptr();
                             assert(tag_index >= 0 && tag_index < bf->stringtab_size && "string index out of bounds");
                             std::string expected_tag = get_string(bf, tag_index);
                             if (sexpr.tag == expected_tag && sexpr.elements.size() == expected_elem_count)
                                 result = 1;
                         }
 
-                        push(&vm, Value{result});
+                        vm.push(Value{result});
                         break;
                     }
                     case 8: { // ARRAY
                         // std::cout << "ARRAY\n";
                         int32_t expected_elem_count;
-                        get_int_from_code(&expected_elem_count, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&expected_elem_count, code);
 
                         int32_t result = 0;
-                        Value tested_val = pop(&vm);
-                        if (is_array(tested_val)) {
-                            Array arr = *get_array(tested_val);
+                        Value tested_val = vm.pop();
+                        if (tested_val.is_array()) {
+                            Array arr = *tested_val.as_array_ptr();
                             if (arr.elements.size() == expected_elem_count)
                                 result = 1;
                         }
 
-                        push(&vm, Value{result});
+                        vm.push(Value{result});
                         break;
                     }
                     case 9: { // FAIL
                         // std::cout << "FAIL\n";
                         int32_t line;
-                        get_int_from_code(&line, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&line, code);
 
                         int32_t column;
-                        get_int_from_code(&column, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&column, code);
 
-                        Value v = pop(&vm);
+                        Value v = vm.pop();
                         std::cerr << "Match failure at line " << line << ", column " << column << "\n";
                         exit(1);
                         break;
@@ -830,8 +789,7 @@ void interpret(bytefile *bf) {
                     case 10: // LINE
                         // std::cout << "LINE\n";
                         int32_t line;
-                        get_int_from_code(&line, code, vm.ip); // Not really necessary, do this just to support the format
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&line, code); // Not really necessary, do this just to support the format
                         vm.current_line = line;
                         break;
                 }
@@ -842,57 +800,57 @@ void interpret(bytefile *bf) {
                     case 0: { // PATT =str
                         // std::cout << "PATT =str\n";
                         int32_t result = 0;
-                        Value b = pop(&vm);
-                        Value a = pop(&vm);
-                        if (is_string(a) && is_string(b)) {
-                            std::string str_a = *get_string_ptr(a);
-                            std::string str_b = *get_string_ptr(b);
-                            result = (str_a == str_b) ? 1 : 0;
+                        Value b = vm.pop();
+                        Value a = vm.pop();
+                        if (a.is_string() && b.is_string()) {
+                            std::string str_a = *a.as_string_ptr();
+                            std::string str_b = *b.as_string_ptr();
+                            result = (str_a == str_b);
                         }
 
-                        push(&vm, Value{result});
+                        vm.push(Value{result});
                         break;
                     }
                     case 1: { // PATT #string
                         // std::cout << "PATT =#string\n";
-                        Value v = pop(&vm);
-                        int32_t result = is_string(v) ? 1 : 0;
-                        push(&vm, Value{result});
+                        Value v = vm.pop();
+                        int32_t result = v.is_string();
+                        vm.push(Value{result});
                         break;
                     }
                     case 2: { // PATT #array
                         // std::cout << "PATT =#array\n";
-                        Value v = pop(&vm);
-                        int32_t result = is_array(v) ? 1 : 0;
-                        push(&vm, Value{result});
+                        Value v = vm.pop();
+                        int32_t result = v.is_array();
+                        vm.push(Value{result});
                         break;
                     }
                     case 3: { // PATT #sexp
                         // std::cout << "PATT =#sexp\n";
-                        Value v = pop(&vm);
-                        int32_t result = is_sexpr(v) ? 1 : 0;
-                        push(&vm, Value{result});
+                        Value v = vm.pop();
+                        int32_t result = v.is_sexpr();
+                        vm.push(Value{result});
                         break;
                     }
                     case 4: { // PATT #ref
                         // std::cout << "PATT =#ref\n";
-                        Value v = pop(&vm);
-                        int32_t result = is_reference(v) ? 1 : 0;
-                        push(&vm, Value{result});
+                        Value v = vm.pop();
+                        int32_t result = v.is_reference();
+                        vm.push(Value{result});
                         break;
                     }
                     case 5: { // PATT #val
                         // std::cout << "PATT =#val\n";
-                        Value v = pop(&vm);
-                        int32_t result = is_integer(v) ? 1 : 0;
-                        push(&vm, Value{result});
+                        Value v = vm.pop();
+                        int32_t result = v.is_integer();
+                        vm.push(Value{result});
                         break;
                     }
                     case 6: { // PATT #fun
                         // std::cout << "PATT =#fun\n";
-                        Value v = pop(&vm);
-                        int32_t result = is_closure(v) ? 1 : 0;
-                        push(&vm, Value{result});
+                        Value v = vm.pop();
+                        int32_t result = v.is_closure();
+                        vm.push(Value{result});
                         break;
                     }
                 }
@@ -906,50 +864,49 @@ void interpret(bytefile *bf) {
                         std::cout << "> ";
                         std::cin >> value;
                         assert(!std::cin.fail() && "invalid input");
-                        push(&vm, Value{value});
+                        vm.push(Value{value});
                         break;
                     }
                     case 1: { // CALL Lwrite
                         // std::cout << "CALL Lwrite\n";
-                        Value v = pop(&vm);
-                        assert(is_integer(v) && "invalid write argument");
-                        std::cout << get_integer(v) << "\n";
-                        push(&vm, Value{std::monostate{}});
+                        Value v = vm.pop();
+                        assert(v.is_integer() && "invalid write argument");
+                        std::cout << v.as_integer() << "\n";
+                        vm.push(Value{std::monostate{}});
                         break;
                     }
                     case 2: {
                         // CALL Llength
                         // std::cout << "CALL Llength\n";
-                        Value v = pop(&vm);
-                        assert(is_aggregate(v) && "non-aggregate argument to length builtin");
+                        Value v = vm.pop();
+                        assert(v.is_aggregate() && "non-aggregate argument to length builtin");
                         int32_t len;
-                        if (is_sexpr(v))
-                            len = get_sexpr(v)->elements.size();
-                        else if (is_array(v))
-                            len = get_array(v)->elements.size();
+                        if (v.is_sexpr())
+                            len = v.as_sexpr_ptr()->elements.size();
+                        else if (v.is_array())
+                            len = v.as_array_ptr()->elements.size();
                         else
-                            len = get_string_ptr(v)->size();
-                        push(&vm, Value{len});
+                            len = v.as_string_ptr()->size();
+                        vm.push(Value{len});
                         break;
                     }
                     case 3: { // CALL Lstring
                         // std::cout << "CALL Lstring\n";
-                        Value v = pop(&vm);
-                        std::string result = value_to_string(v);
-                        push(&vm, Value{std::make_shared<std::string>(result)});
+                        Value v = vm.pop();
+                        std::string result = v.to_string();
+                        vm.push(Value{std::make_shared<std::string>(result)});
                         break;
                     }
                     case 4: { // CALL Barray
                         // std::cout << "CALL Barray\n";
                         int32_t n;
-                        get_int_from_code(&n, code, vm.ip);
-                        vm.ip += sizeof(int32_t);
+                        vm.get_int_from_code(&n, code);
 
                         std::vector<Value> elements;
                         for (int i = 0; i < n; i++)
-                            elements.push_back(pop(&vm));
+                            elements.push_back(vm.pop());
                         std::reverse(elements.begin(), elements.end());
-                        push(&vm, Value{std::make_shared<Array>(Array{elements})});
+                        vm.push(Value{std::make_shared<Array>(Array{elements})});
                         break;
                     }
                 }
@@ -963,25 +920,9 @@ void interpret(bytefile *bf) {
     }
 }
 
-/* Dumps the contents of the file */
-void dump_file (FILE *f, bytefile *bf) {
-    int i;
-
-    // fprintf(f, "String table size       : %d\n", bf->stringtab_size);
-    // fprintf(f, "Global area size        : %d\n", bf->global_area_size);
-    // fprintf(f, "Number of public symbols: %d\n", bf->public_symbols_number);
-    // fprintf(f, "Public symbols          :\n");
-
-    // for (i=0; i < bf->public_symbols_number; i++)
-    //     fprintf(f, "   0x%.8x: %s\n", get_public_offset (bf, i), get_public_name (bf, i));
-
-    // fprintf(f, "Code:\n");
-    interpret(bf);
-}
-
 int main(int argc, char* argv[])
 {
     bytefile *f = read_file(argv[1]);
-    dump_file(stdout, f);
+    interpret(f);
     return 0;
 }
