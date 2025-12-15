@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <stack>
 #include <memory>
+#include <cassert>
+#include <sstream>
 #include <errno.h>
 #include <iostream>
 #include <malloc.h>
@@ -11,7 +13,6 @@
 #include <algorithm>
 #include <string>
 #include <variant>
-#include "./Lama/runtime/runtime.h"
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -85,6 +86,37 @@ bytefile* read_file(char *fname) {
     code_size = size - file->public_symbols_number * 2 * sizeof(int) + file->stringtab_size;
 
     return file;
+}
+
+class RuntimeError : public std::exception {
+private:
+    std::string message;
+    int32_t line_number;
+    int32_t bytecode_offset;
+
+public:
+    RuntimeError(const std::string& msg, int32_t ln, int32_t offset)
+        : message(msg), line_number(ln), bytecode_offset(offset) {
+            std::stringstream str_stream;
+            str_stream << std::hex << bytecode_offset;
+            message += ". Line: " + std::to_string(line_number) + ", bytecode offset: 0x" + str_stream.str();
+    }
+
+    const char* what() const noexcept override {
+        return message.c_str();
+    }
+
+private:
+    static std::string to_hex(int n) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%08x", n);
+        return std::string(buf);
+    }
+};
+
+static inline void check(bool condition, const char *msg, int32_t line_number, int32_t offset) {
+    if (!condition)
+        throw RuntimeError(msg, line_number, offset);
 }
 
 struct Value;
@@ -184,7 +216,7 @@ public:
         } else if (is_reference())
             return "&" + as_reference()->to_string();
 
-        assert(false && "unknown value");
+        assert(false && "unknown value in to_string()");
     }
 };
 
@@ -246,8 +278,8 @@ struct VMState {
     std::vector<Value> locals;
     std::vector<Value> globals;
     std::stack<Frame> frames;
-    int ip;
-    int current_line;
+    int32_t ip;
+    int32_t current_line;
     std::shared_ptr<std::vector<Value>> temp_captured;
 
     inline void push(const Value &v) {
@@ -301,7 +333,7 @@ void interpret(bytefile *bf) {
                 Value b = vm.pop();
                 Value a = vm.pop();
                 if (low == 10) {
-                    assert(b.is_integer() || a.is_integer() && "one of the operands must be integer");
+                    check(b.is_integer() || a.is_integer(), "one of the operands must be integer", vm.current_line, vm.ip);
                     if (a.is_integer() && b.is_integer()) {
                         int32_t b_int = b.as_integer();
                         int32_t a_int = a.as_integer();
@@ -310,9 +342,9 @@ void interpret(bytefile *bf) {
                     vm.push(res);
                     break;
                 }
-                assert(b.is_integer() && "operand must be integer");
+                check(b.is_integer(), "operand must be integer", vm.current_line, vm.ip);
                 int32_t b_int = b.as_integer();
-                assert(a.is_integer() && "operand must be integer");
+                check(a.is_integer(), "operand must be integer", vm.current_line, vm.ip);
                 int32_t a_int = a.as_integer();
 
                 switch (low) {
@@ -335,14 +367,14 @@ void interpret(bytefile *bf) {
                         break;
                     }
                     case 4: { // DIV
-                        assert(b_int != 0 && "division by zero");
+                        check(b_int != 0, "division by zero", vm.current_line, vm.ip);
                         // Division with wraparound through 64-bit values
                         int64_t temp = static_cast<int64_t>(a_int) / static_cast<int64_t>(b_int);
                         res = static_cast<int32_t>(temp);
                         break;
                     }
                     case 5: { // MOD
-                        assert(b_int != 0 && "division by zero");
+                        check(b_int != 0, "division by zero", vm.current_line, vm.ip);
                         // Division remainder with wraparound through 64-bit values
                         int64_t temp = static_cast<int64_t>(a_int) % static_cast<int64_t>(b_int);
                         res = static_cast<int32_t>(temp);
@@ -414,7 +446,7 @@ void interpret(bytefile *bf) {
                     case 3: { // STI
                         // std::cout << "STI\n";
                         Value ref = vm.pop();
-                        assert(ref.is_reference() && "STI: argument should be reference");
+                        check(ref.is_reference(), "STI: argument should be reference", vm.current_line, vm.ip);
                         Value* ref_ptr = ref.as_reference();
                         Value val = vm.pop();
                         *ref_ptr = val;
@@ -429,25 +461,25 @@ void interpret(bytefile *bf) {
                         if(idx_val.is_integer()) {
                             int32_t idx = idx_val.as_integer();
                             Value agg = vm.pop();
-                            assert(agg.is_aggregate() && "STA: non-aggregate argument");
+                            check(agg.is_aggregate(), "STA: non-aggregate argument", vm.current_line, vm.ip);
 
                             if (agg.is_string()) {
-                                assert(val.is_integer() && "STA: value must be integer for string");
+                                check(val.is_integer(), "STA: value must be integer for string", vm.current_line, vm.ip);
                                 StringPtr str_ptr = agg.as_string_ptr();
-                                assert(idx >= 0 && idx < str_ptr->size() && "STA: string index out of bounds");
+                                check(idx >= 0 && idx < str_ptr->size(), "STA: string index out of bounds", vm.current_line, vm.ip);
                                 int32_t char_code = val.as_integer();
                                 (*str_ptr)[idx] = static_cast<char>(char_code);
                             } else if (agg.is_array()) {
                                 ArrayPtr arr_ptr = agg.as_array_ptr();
-                                assert(idx >= 0 && idx < arr_ptr->elements.size() && "STA: array index out of bounds");
+                                check(idx >= 0 && idx < arr_ptr->elements.size(), "STA: array index out of bounds", vm.current_line, vm.ip);
                                 arr_ptr->elements[idx] = val;
                             } else {
                                 SExprPtr sexpr_ptr = agg.as_sexpr_ptr();
-                                assert(idx >= 0 && idx < sexpr_ptr->elements.size() && "STA: S-expression index out of bounds");
+                                check(idx >= 0 && idx < sexpr_ptr->elements.size(), "STA: S-expression index out of bounds", vm.current_line, vm.ip);
                                 sexpr_ptr->elements[idx] = val; 
                             }
                         } else {
-                            assert(idx_val.is_reference() && "STA: second operand should be reference");
+                            check(idx_val.is_reference(), "STA: second operand should be reference", vm.current_line, vm.ip);
                             Value* ref_ptr = idx_val.as_reference();
                             *ref_ptr = val;
                         }
@@ -458,7 +490,7 @@ void interpret(bytefile *bf) {
                         // std::cout << "JMP\n";
                         int32_t loc;
                         vm.get_int_from_code(&loc, code);
-                        assert(loc <= code_size && "incorrect jump destination");
+                        check(loc <= code_size, "incorrect jump destination", vm.current_line, vm.ip);
                         vm.ip = loc;
                         break;
                     }
@@ -496,22 +528,22 @@ void interpret(bytefile *bf) {
                     case 11: { // ELEM
                         // std::cout << "ELEM\n";
                         Value index = vm.pop();
-                        assert(index.is_integer() && "Element's index must be integer");
+                        check(index.is_integer(), "Element's index must be integer", vm.current_line, vm.ip);
                         int32_t idx = index.as_integer();
                         Value agg = vm.pop();
-                        assert(agg.is_aggregate() && "Aggregate must be string, SExpr, or an Array");
+                        check(agg.is_aggregate(), "Aggregate must be string, SExpr, or an Array", vm.current_line, vm.ip);
 
                         if (agg.is_sexpr()) {
                             SExprPtr sexpr_ptr = agg.as_sexpr_ptr();
-                            assert(idx < sexpr_ptr->elements.size() && "Element index is greater than elements size");
+                            check(idx < sexpr_ptr->elements.size(), "Element index is greater than elements size", vm.current_line, vm.ip);
                             vm.push(sexpr_ptr->elements[idx]);
                         } else if (agg.is_array()) {
                             ArrayPtr arr_ptr = agg.as_array_ptr();
-                            assert(idx < arr_ptr->elements.size() && "Element index is greater than elements size");
+                            check(idx < arr_ptr->elements.size(), "Element index is greater than elements size", vm.current_line, vm.ip);
                             vm.push(arr_ptr->elements[idx]);
                         } else if (agg.is_string()) {
                             StringPtr str_ptr = agg.as_string_ptr();
-                            assert(idx < str_ptr->size() && "Element index is greater than string's size");
+                            check(idx < str_ptr->size(), "Element index is greater than string's size", vm.current_line, vm.ip);
                             vm.push(Value{static_cast<int32_t>((*str_ptr)[idx])});
                         }
                         break;
@@ -530,27 +562,27 @@ void interpret(bytefile *bf) {
                 Value *target;
                 switch (low) {
                     case 0: { // G(addr)
-                        assert(addr >= 0 && addr < vm.globals.size() && "LD/LDA: global index out of bounds");
+                        check(addr >= 0 && addr < vm.globals.size(), "LD/LDA: global index out of bounds", vm.current_line, vm.ip);
                         target = vm.get_global_ptr(addr);
                         break;
                     }
                     case 1: { // L(addr)
-                        assert(addr >= 0 && addr < cf->local_count && "LD/LDA: local index out of bounds");
+                        check(addr >= 0 && addr < cf->local_count, "LD/LDA: local index out of bounds", vm.current_line, vm.ip);
                         target = cf->get_local_ptr(addr);
                         break;
                     }
                     case 2: { // A(addr)
-                        assert(addr >= 0 && addr < cf->arg_count && "LD/LDA: argument index out of bounds");
+                        check(addr >= 0 && addr < cf->arg_count, "LD/LDA: argument index out of bounds", vm.current_line, vm.ip);
                         target = cf->get_arg_ptr(addr);
                         break;
                     }
                     case 3: { // C(addr)
-                        assert(addr >= 0 && addr < cf->captured_vars->size() && "LD/LDA: captured index out of bounds");
+                        check(addr >= 0 && addr < cf->captured_vars->size(), "LD/LDA: captured index out of bounds", vm.current_line, vm.ip);
                         target = cf->get_captured_ptr(addr);
                         break;
                     }
                     default:
-                        assert(false && "LD/LDA: unknown addressing mode");
+                        check(false, "LD/LDA: unknown addressing mode", vm.current_line, vm.ip);
                 }
 
                 if (high == 2) // LD
@@ -568,30 +600,30 @@ void interpret(bytefile *bf) {
 
                 switch (low) {
                     case 0: { // G(addr)
-                        assert(addr >= 0 && addr < vm.globals.size() && "ST: global index out of bounds");
+                        check(addr >= 0 && addr < vm.globals.size(), "ST: global index out of bounds", vm.current_line, vm.ip);
                         vm.globals[addr] = v;
                         break;
                     }
                     case 1: { // L(addr)
                         Frame *cf = vm.get_current_frame();
-                        assert(addr >= 0 && addr < cf->local_count && "ST: local index out of bounds");
+                        check(addr >= 0 && addr < cf->local_count, "ST: local index out of bounds", vm.current_line, vm.ip);
                         cf->set_local(addr, v);
                         break;
                     }
                     case 2: { // A(addr)
                         Frame *cf = vm.get_current_frame();
-                        assert(addr >= 0 && addr < cf->arg_count && "ST: argument index out of bounds");
+                        check(addr >= 0 && addr < cf->arg_count, "ST: argument index out of bounds", vm.current_line, vm.ip);
                         cf->set_arg(addr, v);
                         break;
                     }
                     case 3: {
                         Frame *cf = vm.get_current_frame();
-                        assert(addr >= 0 && addr < cf->captured_vars->size() && "ST: captured index out of bounds");
+                        check(addr >= 0 && addr < cf->captured_vars->size(), "ST: captured index out of bounds", vm.current_line, vm.ip);
                         cf->set_captured(addr, v);
                         break;
                     }
                     default:
-                        assert(false && "ST: unknown addressing mode");
+                        check(false, "ST: unknown addressing mode", vm.current_line, vm.ip);
                 }
                 vm.push(v);
                 break;
@@ -605,10 +637,10 @@ void interpret(bytefile *bf) {
                         vm.get_int_from_code(&loc, code);
 
                         Value cond = vm.pop();
-                        assert(cond.is_integer() && "CJMPz/CJMPnz argument should be integer");
+                        check(cond.is_integer(), "CJMPz/CJMPnz argument should be integer", vm.current_line, vm.ip);
                         int32_t int_cond = cond.as_integer();
                         if ((low == 0 && int_cond == 0) || (low == 1 && int_cond != 0)) {
-                            assert(loc <= code_size && "incorrect jump destination");
+                            check(loc <= code_size, "incorrect jump destination", vm.current_line, vm.ip);
                             vm.ip = loc;
                         }
                         break;
@@ -623,7 +655,7 @@ void interpret(bytefile *bf) {
                         Frame *prev_frame = vm.get_current_frame();
                         Frame new_frame(arg_count, local_count);
                         if (prev_frame) {
-                            assert(arg_count == prev_frame->saved_args.size() && "saved args length != arg_count");
+                            check(arg_count == prev_frame->saved_args.size(), "saved args length != arg_count", vm.current_line, vm.ip);
                             for (int i = 0; i < arg_count; i++)
                                 new_frame.set_arg(i, prev_frame->saved_args[i]);
                         }
@@ -672,7 +704,7 @@ void interpret(bytefile *bf) {
                                     v = cf->get_captured(addr);
                                     break;
                                 default:
-                                    assert(false && "invalid varspec for CLOSURE");
+                                    check(false, "invalid varspec for CLOSURE", vm.current_line, vm.ip);
                             }
                             captured_vars->push_back(v);
                         }
@@ -694,7 +726,7 @@ void interpret(bytefile *bf) {
                         std::reverse(current_frame->saved_args.begin(), current_frame->saved_args.end());
 
                         Value closure_val = vm.pop();
-                        assert(closure_val.is_closure() && "first argument to CALLC must be closure");
+                        check(closure_val.is_closure(), "first argument to CALLC must be closure", vm.current_line, vm.ip);
                         Closure closure = closure_val.as_closure();
 
                         // Also save captured variables created in CLOSURE bytecode
@@ -702,13 +734,13 @@ void interpret(bytefile *bf) {
 
                         // Do a JMP, basically
                         int32_t target = closure.code_offset;
-                        assert(target <= code_size && "incorrect CALLC destination");
+                        check(target <= code_size, "incorrect CALLC destination", vm.current_line, vm.ip);
                         vm.ip = target;
 
                         int next_op = code[vm.ip];
                         int next_high = (next_op >> 4) & 0xF;
                         int next_low = next_op & 0xF;
-                        assert(next_high == 5 && (next_low == 3 || next_low == 2) && "destination instruction after CALLC should be CBEGIN or BEGIN");
+                        check(next_high == 5 && (next_low == 3 || next_low == 2), "destination instruction after CALLC should be CBEGIN or BEGIN", vm.current_line, vm.ip);
                         break;
                     }
                     case 6: { // CALL
@@ -727,13 +759,13 @@ void interpret(bytefile *bf) {
                         std::reverse(current_frame->saved_args.begin(), current_frame->saved_args.end());
 
                         // Do a JMP, basically
-                        assert(target <= code_size && "incorrect call destination");
+                        check(target <= code_size, "incorrect call destination", vm.current_line, vm.ip);
                         vm.ip = target;
 
                         int next_op = code[vm.ip];
                         int next_high = (next_op >> 4) & 0xF;
                         int next_low = next_op & 0xF;
-                        assert(next_high == 5 && next_low == 2 && "destination instruction after CALLC should be CBEGIN");
+                        check(next_high == 5 && next_low == 2, "destination instruction after CALLC should be CBEGIN", vm.current_line, vm.ip);
                         break;
                     }
                     case 7: { // TAG
@@ -748,7 +780,7 @@ void interpret(bytefile *bf) {
                         Value tested_val = vm.pop();
                         if (tested_val.is_sexpr()) {
                             SExpr sexpr = *tested_val.as_sexpr_ptr();
-                            assert(tag_index >= 0 && tag_index < bf->stringtab_size && "string index out of bounds");
+                            check(tag_index >= 0 && tag_index < bf->stringtab_size, "string index out of bounds", vm.current_line, vm.ip);
                             std::string expected_tag = get_string(bf, tag_index);
                             if (sexpr.tag == expected_tag && sexpr.elements.size() == expected_elem_count)
                                 result = 1;
@@ -789,7 +821,7 @@ void interpret(bytefile *bf) {
                     case 10: // LINE
                         // std::cout << "LINE\n";
                         int32_t line;
-                        vm.get_int_from_code(&line, code); // Not really necessary, do this just to support the format
+                        vm.get_int_from_code(&line, code);
                         vm.current_line = line;
                         break;
                 }
@@ -863,14 +895,14 @@ void interpret(bytefile *bf) {
                         int32_t value;
                         std::cout << "> ";
                         std::cin >> value;
-                        assert(!std::cin.fail() && "invalid input");
+                        check(!std::cin.fail(), "invalid input", vm.current_line, vm.ip);
                         vm.push(Value{value});
                         break;
                     }
                     case 1: { // CALL Lwrite
                         // std::cout << "CALL Lwrite\n";
                         Value v = vm.pop();
-                        assert(v.is_integer() && "invalid write argument");
+                        check(v.is_integer(), "invalid write argument", vm.current_line, vm.ip);
                         std::cout << v.as_integer() << "\n";
                         vm.push(Value{std::monostate{}});
                         break;
@@ -879,7 +911,7 @@ void interpret(bytefile *bf) {
                         // CALL Llength
                         // std::cout << "CALL Llength\n";
                         Value v = vm.pop();
-                        assert(v.is_aggregate() && "non-aggregate argument to length builtin");
+                        check(v.is_aggregate(), "non-aggregate argument to length builtin", vm.current_line, vm.ip);
                         int32_t len;
                         if (v.is_sexpr())
                             len = v.as_sexpr_ptr()->elements.size();
@@ -915,14 +947,19 @@ void interpret(bytefile *bf) {
             case 15:
                 return;
             default:
-                assert(false && "unknown bytecode");
+                check(false, "unknown bytecode", vm.current_line, vm.ip);
         }
     }
 }
 
 int main(int argc, char* argv[])
 {
-    bytefile *f = read_file(argv[1]);
-    interpret(f);
-    return 0;
+    try {
+        bytefile* f = read_file(argv[1]);
+        interpret(f);
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return 1;
+    }
 }
