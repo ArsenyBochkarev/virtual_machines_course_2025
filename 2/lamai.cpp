@@ -1027,52 +1027,46 @@ struct VMState {
 
     inline void execute_patt_str() {
         // std::cout << "PATT =str\n";
-        int32_t result = 0;
         Value b = pop();
         Value a = pop();
-        if (a.is_string() && b.is_string()) {
-            std::string str_a = a.as_string_ptr();
-            std::string str_b = b.as_string_ptr();
-            result = (str_a == str_b);
-        }
-
-        push(Value::from_int(result));
+        auto result = Bstring_patt(a.as_ptr(), b.as_ptr());
+        push(Value::from_repr(result));
     }
     inline void execute_patt_string() {
         // std::cout << "PATT =#string\n";
         Value v = pop();
-        int32_t result = v.is_string();
-        push(Value::from_int(result));
+        auto result = Bstring_tag_patt(v.as_ptr());
+        push(Value::from_repr(result));
     }
     inline void execute_patt_array() {
         // std::cout << "PATT =#array\n";
         Value v = pop();
-        int32_t result = v.is_array();
+        auto result = Barray_tag_patt(v.as_ptr());
         push(Value::from_int(result));
     }
     inline void execute_patt_sexp() {
         // std::cout << "PATT =#sexp\n";
         Value v = pop();
-        int32_t result = v.is_sexpr();
-        push(Value::from_int(result));
+        auto result = Bsexp_tag_patt(v.as_ptr());
+        push(Value::from_repr(result));
     }
     inline void execute_patt_ref() {
         // std::cout << "PATT =#ref\n";
         Value v = pop();
-        int32_t result = v.is_boxed();
-        push(Value::from_int(result));
+        auto result = Bboxed_patt(v.as_ptr());
+        push(Value::from_repr(result));
     }
     inline void execute_patt_val() {
         // std::cout << "PATT =#val\n";
         Value v = pop();
-        int32_t result = v.is_integer();
-        push(Value::from_int(result));
+        auto result = Bunboxed_patt(v.as_ptr());
+        push(Value::from_repr(result));
     }
     inline void execute_patt_fun() {
         // std::cout << "PATT =#fun\n";
         Value v = pop();
-        int32_t result = v.is_closure();
-        push(Value::from_int(result));
+        auto result = Bclosure_tag_patt(v.as_ptr());
+        push(Value::from_repr(result));
     }
 
     inline void execute_read() {
