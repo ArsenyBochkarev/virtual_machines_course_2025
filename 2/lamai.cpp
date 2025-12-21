@@ -36,16 +36,6 @@ char* get_string(bytefile *f, int pos) {
     return &f->string_ptr[pos];
 }
 
-/* Gets a name for a public symbol */
-char* get_public_name(bytefile *f, int i) {
-    return get_string(f, f->public_ptr[i*2]);
-}
-
-/* Gets an offset for a publie symbol */
-int get_public_offset(bytefile *f, int i) {
-    return f->public_ptr[i*2+1];
-}
-
 static int code_size = -1;
 
 /* Reads a binary bytecode file by name and unpacks it */
@@ -65,7 +55,14 @@ bytefile* read_file(char *fname) {
         exit(1);
     }
 
-    file = (bytefile*) malloc (sizeof(int)*4 + (size = ftell (f)));
+    size = ftell (f);
+    if (size == -1) {
+        fprintf(stderr, "%s\n", strerror(errno));
+        fclose(f);
+        exit(1);
+    }
+
+    file = (bytefile*) malloc (sizeof(int)*4 + size);
     if (!file) {
         fprintf(stderr, "*** FAILURE: unable to allocate memory.\n");
         fclose(f);
@@ -379,10 +376,12 @@ struct VMState {
     }
 
     inline void get_int_from_code(int32_t *v, char* code) {
+        check(ip + sizeof(int32_t) <= code_size, "reading beyond code segment", current_line, ip);
         std::memcpy(v, code + ip, sizeof(int32_t));
         ip += sizeof(int32_t);
     }
     inline void get_char_from_code(int8_t *v, char* code) {
+        check(ip + sizeof(int8_t) <= code_size, "reading beyond code segment", current_line, ip);
         std::memcpy(v, code + ip, sizeof(int8_t));
         ip += sizeof(int8_t);
     }
@@ -480,6 +479,7 @@ struct VMState {
         // std::cout << "STRING\n";
         int32_t string_index;
         get_int_from_code(&string_index, code); // Get string index from stack
+        check(string_index >= 0 && string_index < bf->stringtab_size, "STRING: string index out of bounds", current_line, ip);
         char *str = get_string(bf, string_index);
         auto *v = get_object_content_ptr(alloc_string(strlen(str)));
         strcpy(TO_DATA(v)->contents, str);
@@ -491,7 +491,9 @@ struct VMState {
         get_int_from_code(&tag_index, code);
         int32_t elem_count;
         get_int_from_code(&elem_count, code);
+        check(elem_count >= 0, "SEXP: negative element count", current_line, ip);
 
+        check(tag_index >= 0 && tag_index < bf->stringtab_size, "SEXP: tag index out of bounds", current_line, ip);
         char *tag = get_string(bf, tag_index);
         auto *v = get_object_content_ptr(alloc_sexp(elem_count));
         sexp* sexp_obj = TO_SEXP(v);
@@ -778,6 +780,7 @@ struct VMState {
         // std::cout << "CJMPz\n";
         int32_t loc;
         get_int_from_code(&loc, code);
+        check(loc <= code_size, "incorrect CJMPz destination", current_line, ip);
 
         Value cond = pop();
         check(cond.is_integer(), "CJMPz argument should be integer", current_line, ip);
@@ -791,6 +794,7 @@ struct VMState {
         // std::cout << "CJMPnz\n";
         int32_t loc;
         get_int_from_code(&loc, code);
+        check(loc <= code_size, "incorrect CJMPnz destination", current_line, ip);
 
         Value cond = pop();
         check(cond.is_integer(), "CJMPnz argument should be integer", current_line, ip);
@@ -805,6 +809,7 @@ struct VMState {
         get_int_from_code(&arg_count, code);
         int32_t local_count;
         get_int_from_code(&local_count, code);
+        check(arg_count >= 0 && local_count >= 0, "BEGIN: incorrect args or locals count", current_line, ip);
 
         Frame *prev_frame = get_current_frame();
         int32_t base = stack_top; // base should point to local variables
@@ -834,6 +839,7 @@ struct VMState {
         get_int_from_code(&arg_count, code);
         int32_t local_count;
         get_int_from_code(&local_count, code);
+        check(arg_count >= 0 && local_count >= 0, "CBEGIN: incorrect args or locals count", current_line, ip);
 
         Frame *prev_frame = get_current_frame();
         int32_t base = stack_top;
@@ -864,8 +870,11 @@ struct VMState {
         // std::cout << "CLOSURE\n";
         int32_t target;
         get_int_from_code(&target, code);
+        check(target >= 0 && target <= code_size, "CLOSURE: invalid target address", current_line, ip);
+
         int32_t n;
         get_int_from_code(&n, code);
+        check(n >= 0, "CLOSURE: negative capture count", current_line, ip);
 
         auto *closure_obj = get_object_content_ptr(alloc_closure(n + 1)); // +1 for code_offset
         auint* captures_ptr = reinterpret_cast<auint*>(TO_DATA(closure_obj)->contents);
@@ -873,6 +882,7 @@ struct VMState {
         for (int i = 0; i < n; i++) {
             int8_t type;
             get_char_from_code(&type, code); // G: 00, L: 01, A: 02, C: 03
+            check(type >= 0 && type <= 3, "CLOSURE: invalid varspec type", current_line, ip);
 
             int32_t addr;
             get_int_from_code(&addr, code);
@@ -881,17 +891,23 @@ struct VMState {
             Value v;
             switch (type) {
                 case 0: // G(addr)
+                    check(addr >= 0 && addr < global_area_size, "CLOSURE: global index out of bounds", current_line, ip);
                     v = Value::from_repr(get_global(addr));
                     break;
                 case 1: // L(addr)
+                    check(addr >= 0 && addr < cf->local_count, "CLOSURE: local index out of bounds", current_line, ip);
                     v = Value::from_repr(cf->get_local(*this, addr));
                     break;
                 case 2: // A(addr)
+                    check(addr >= 0 && addr < cf->arg_count, "CLOSURE: argument index out of bounds", current_line, ip);
                     v = Value::from_repr(cf->get_arg(*this, addr));
                     break;
-                case 3: // C(addr)
+                case 3: { // C(addr)
+                    Value closure_val = stack[cf->base - cf->arg_count - 1];
+                    check(addr >= 0 && addr < closure_val.size(), "LD: captured index out of bounds", current_line, ip);
                     v = cf->get_captured(*this, addr);
                     break;
+                }
                 default:
                     check(false, "invalid varspec for CLOSURE", current_line, ip);
             }
@@ -903,6 +919,7 @@ struct VMState {
         // std::cout << "CALLC\n";
         int32_t n;
         get_int_from_code(&n, code);
+        check(n >= 0, "CALLC: negative arguments count", current_line, ip);
 
         Frame *current_frame = get_current_frame();
         current_frame->return_address = ip;
@@ -935,8 +952,11 @@ struct VMState {
         // std::cout << "CALL\n";
         int32_t target;
         get_int_from_code(&target, code);
+        check(target >= 0 && target < code_size, "CALL: invalid target address", current_line, ip);
+
         int32_t n;
         get_int_from_code(&n, code);
+        check(n >= 0, "CALL: negative arguments count", current_line, ip);
 
         Frame *current_frame = get_current_frame();
         current_frame->return_address = ip;
@@ -963,8 +983,9 @@ struct VMState {
         int32_t result = 0;
         Value tested_val = pop();
         if (tested_val.is_sexpr()) {
+            check(expected_elem_count >= 0, "TAG: negative element count", current_line, ip);
             sexp *sexpr = tested_val.as_sexpr_ptr();
-            check(tag_index >= 0 && tag_index < bf->stringtab_size, "string index out of bounds", current_line, ip);
+            check(tag_index >= 0 && tag_index < bf->stringtab_size, "TAG: string index out of bounds", current_line, ip);
             char *actual_tag = reinterpret_cast<char*>(sexpr->tag);
             char *expected_tag = get_string(bf, tag_index);
             if (strcmp(actual_tag, expected_tag) == 0 && LEN(sexpr->data_header) == expected_elem_count)
