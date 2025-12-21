@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+constexpr uint32_t MAX_STACK_SIZE = 0x7fffffffU;
+
 namespace Bytecode {
     constexpr uint8_t BINOP_HIGH   = 0x00;
     namespace Binop {

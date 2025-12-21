@@ -66,7 +66,7 @@ LAMA_RUNTIME=$(PWD)/Lama/runtime
 performance: $(PERF_TESTS)
 
 build-lama-runtime:
-	@cp $(PWD)/lama_runtime_makefile $(LAMA_RUNTIME)/Makefile && cd $(LAMA_RUNTIME) && make all
+	@cp $(PWD)/lama_runtime_makefile $(LAMA_RUNTIME)/Makefile && cp $(PWD)/runtime/runtime.c $(LAMA_RUNTIME)/runtime.c && cd $(LAMA_RUNTIME) && make all
 
 $(PERF_TESTS): %: %.lama
 	@echo "Recursive source-level interpreter:" $@

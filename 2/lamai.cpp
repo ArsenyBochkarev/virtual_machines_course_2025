@@ -16,8 +16,8 @@
 #include "lamai.hpp"
 #include "runtime.hpp"
 
-extern void* __gc_stack_top;
-extern void* __gc_stack_bottom;
+extern size_t* __gc_stack_top;
+extern size_t* __gc_stack_bottom;
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -177,116 +177,10 @@ struct Value {
     bool is_closure() const { return is_boxed() && get_type() == CLOSURE; }
     bool is_aggregate() const { return is_boxed() && (is_array() || is_sexpr() || is_string()); }
 
-    std::string to_string() const {
-        if (repr == 0)
-            return "()";
-        if (is_integer())
-            return std::to_string(as_integer());
-
-        void* ptr = as_ptr();
-        lama_type type = get_type_header_ptr(get_obj_header_ptr(ptr));
-        switch (type) {
-            case STRING: {
-                char* str = TO_DATA(ptr)->contents;
-                return std::string("\"") + str + "\"";
-            }
-
-            case ARRAY: {
-                data* d = TO_DATA(ptr);
-                size_t len = LEN(d->data_header);
-                std::string result = "[";
-                auint* elements = reinterpret_cast<auint*>(d->contents);
-
-                for (size_t i = 0; i < len; i++) {
-                    if (i > 0)
-                        result += ", ";
-                    Value elem = Value::from_int(elements[i]);
-                    result += elem.to_string();
-                }
-                result += "]";
-                return result;
-            }
-
-            case SEXP: {
-                sexp* s = TO_SEXP(ptr);
-                size_t len = LEN(s->data_header);
-
-                char* tag = reinterpret_cast<char*>(s->tag);
-                std::string result = tag;
-
-                if (len > 0) {
-                    result += " (";
-                    auint* elements = reinterpret_cast<auint*>(s->contents);
-
-                    for (size_t i = 0; i < len; i++) {
-                        if (i > 0)
-                            result += ", ";
-                        Value elem = Value::from_int(elements[i]);
-                        result += elem.to_string();
-                    }
-                    result += ")";
-                }
-                return result;
-            }
-            case CLOSURE:
-                return "<function>";
-            default:
-                return "<unknown>";
-        }
-    }
-
-    char* as_string_ptr() const {
-        return TO_DATA(as_ptr())->contents;
-    }
-    auint* as_array_ptr() const {
-        return reinterpret_cast<auint*>(TO_DATA(as_ptr())->contents);
-    }
-    sexp* as_sexpr_ptr() const {
-        return TO_SEXP(as_ptr());
-    }
-
-    auint* as_reference() const {
-        return reinterpret_cast<auint*>(repr);
-    }
-
     size_t size() const {
         if (is_integer())
             return 0;
-        data* d = TO_DATA(as_ptr());
-        return LEN(d->data_header);
-    }
-
-    Value get_element(size_t idx) const {
-        assert(is_aggregate() && idx < size());
-
-        if (is_string()) {
-            return Value::from_int(static_cast<auint>(as_string_ptr()[idx]));
-        } else if (is_array()) {
-            return Value{as_array_ptr()[idx]};
-        } else if (is_sexpr()) {
-            sexp* s = as_sexpr_ptr();
-            auint* contents = reinterpret_cast<auint*>(s->contents);
-            return Value{contents[idx]};
-        }
-        assert(false);
-        return Value{0};
-    }
-
-    // Установка элемента агрегата
-    void set_element(size_t idx, Value v) {
-        assert(is_aggregate() && idx < size());
-
-        if (is_string()) {
-            assert(v.is_integer());
-            int32_t char_code = v.as_integer();
-            as_string_ptr()[idx] = static_cast<char>(char_code);
-        } else if (is_array()) {
-            as_array_ptr()[idx] = v.repr;
-        } else if (is_sexpr()) {
-            sexp* s = as_sexpr_ptr();
-            auint* contents = reinterpret_cast<auint*>(s->contents);
-            contents[idx] = v.repr;
-        }
+        return Llength(as_ptr());
     }
 };
 
@@ -294,6 +188,7 @@ struct VMState {
     std::vector<auint> stack;
     int32_t stack_top;
     bytefile *bf;
+    char *fname;
     char *code;
     int32_t ip;
     int32_t current_line;
@@ -351,16 +246,17 @@ struct VMState {
     std::stack<Frame> frames;
 
     inline void push(Value v) {
+        check(stack_top < MAX_STACK_SIZE, "stack overflow", current_line, ip);
         if (stack_top >= stack.size())
             stack.resize(stack.size() * 2);
         stack[stack_top++] = v.repr;
-        __gc_stack_bottom = static_cast<void *>(&stack[0] + stack_top);
+        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
     }
     inline Value pop() {
         check(stack_top > 0, "stack underflow", current_line, ip);
         Value v{stack[stack_top-1]};
         stack_top--;
-        __gc_stack_bottom = static_cast<void *>(&stack[0] + stack_top);
+        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
         return v;
     }
     inline Value peek(int offset = 0) {
@@ -481,8 +377,7 @@ struct VMState {
         get_int_from_code(&string_index, code); // Get string index from stack
         check(string_index >= 0 && string_index < bf->stringtab_size, "STRING: string index out of bounds", current_line, ip);
         char *str = get_string(bf, string_index);
-        auto *v = get_object_content_ptr(alloc_string(strlen(str)));
-        strcpy(TO_DATA(v)->contents, str);
+        auto *v = Bstring((aint*)&str);
         push(Value::from_ptr(v));
     }
     inline void execute_sexp() {
@@ -495,16 +390,17 @@ struct VMState {
 
         check(tag_index >= 0 && tag_index < bf->stringtab_size, "SEXP: tag index out of bounds", current_line, ip);
         char *tag = get_string(bf, tag_index);
-        auto *v = get_object_content_ptr(alloc_sexp(elem_count));
-        sexp* sexp_obj = TO_SEXP(v);
-        sexp_obj->tag = reinterpret_cast<auint>(tag);
-
-        // Getting elements from stack
-        auint* content_ptr = reinterpret_cast<auint*>(sexp_obj->contents);
+        aint tag_hash = LtagHash(tag);
+        aint* args = (aint*)malloc((elem_count + 1) * sizeof(aint));
+        check(args, "SEXP: memory allocation failed", current_line, ip);
         for (int i = 0; i < elem_count; i++) {
             Value elem = pop();
-            content_ptr[elem_count - i - 1] = elem.repr;
+            args[elem_count - i - 1] = (aint)elem.repr;
         }
+        args[elem_count] = tag_hash;
+        void* v = Bsexp(args, BOX(elem_count + 1));
+
+        free(args);
         push(Value::from_ptr(v));
     }
     inline void execute_sti() {
@@ -526,26 +422,11 @@ struct VMState {
             int32_t idx = idx_val.as_integer();
             Value agg = pop();
             check(agg.is_aggregate(), "STA: non-aggregate argument", current_line, ip);
-
-            if (agg.is_string()) {
-                check(val.is_integer(), "STA: value must be integer for string", current_line, ip);
-                char *str_ptr = agg.as_string_ptr();
-                check(idx >= 0 && idx < strlen(str_ptr), "STA: string index out of bounds", current_line, ip);
-                int32_t char_code = val.as_integer();
-                str_ptr[idx] = static_cast<char>(char_code);
-            } else if (agg.is_array()) {
-                auint *arr_ptr = agg.as_array_ptr();
-                check(idx >= 0 && idx < agg.size(), "STA: array index out of bounds", current_line, ip);
-                arr_ptr[idx] = val.repr;
-            } else {
-                sexp *sexpr_ptr = agg.as_sexpr_ptr();
-                check(idx >= 0 && idx < agg.size(), "STA: S-expression index out of bounds", current_line, ip);
-                sexpr_ptr->contents[idx] = val.repr;
-            }
+            check(idx >= 0 && idx < agg.size(), "STA: aggregate index out of bounds", current_line, ip);
+            Bsta(agg.as_ptr(), idx_val.repr, val.as_ptr());
         } else {
             check(idx_val.is_boxed(), "STA: second operand should be reference", current_line, ip);
-            auint* ref_ptr = idx_val.as_reference();
-            *ref_ptr = val.repr;
+            Bsta(idx_val.as_ptr(), idx_val.repr, val.as_ptr());
         }
         push(val);
     }
@@ -571,7 +452,7 @@ struct VMState {
 
         Frame* caller_frame = get_current_frame();
         ip = caller_frame->return_address;
-        __gc_stack_bottom = static_cast<void *>(&stack[0] + stack_top);
+        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
 
         push(ret_val); // TODO: remove this and `pop` above if we need some acceleration
         return false;
@@ -591,7 +472,7 @@ struct VMState {
 
         Frame* caller_frame = get_current_frame();
         ip = caller_frame->return_address;
-        __gc_stack_bottom = static_cast<void *>(&stack[0] + stack_top);
+        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
 
         push(ret_val); // TODO: remove this and `pop` above if we need some acceleration
         return false;
@@ -615,24 +496,10 @@ struct VMState {
         // std::cout << "ELEM\n";
         Value index = pop();
         check(index.is_integer(), "Element's index must be integer", current_line, ip);
-        int32_t idx = index.as_integer();
         Value agg = pop();
         check(agg.is_aggregate(), "Aggregate must be string, SExpr, or an Array", current_line, ip);
-
-        if (agg.is_sexpr()) {
-            sexp *sexpr_ptr = agg.as_sexpr_ptr();
-            check(idx < agg.size(), "Element index is greater than elements size", current_line, ip);
-            auint* contents = reinterpret_cast<auint*>(sexpr_ptr->contents);
-            push(contents[idx]);
-        } else if (agg.is_array()) {
-            auint *arr_ptr = agg.as_array_ptr();
-            check(idx < agg.size(), "Element index is greater than elements size", current_line, ip);
-            push(arr_ptr[idx]);
-        } else if (agg.is_string()) {
-            char *str_ptr = agg.as_string_ptr();
-            check(idx < strlen(str_ptr), "Element index is greater than string's size", current_line, ip);
-            push(Value::from_int(static_cast<auint>(str_ptr[idx])));
-        }
+        auto *result = Belem(agg.as_ptr(), index.repr);
+        push(Value::from_ptr(result));
     }
 
     // LD
@@ -825,6 +692,7 @@ struct VMState {
         int32_t new_stack_top = stack_top + local_count;
         if (new_stack_top > stack.size())
             stack.resize(std::max(static_cast<size_t>(new_stack_top), stack.size() * 2), 0);
+        check(new_stack_top < MAX_STACK_SIZE, "stack overflow", current_line, ip);
         stack_top = new_stack_top;
 
         // Empty values for new_frame's locals
@@ -832,7 +700,7 @@ struct VMState {
             new_frame.set_local(*this, i, 0);
 
         frames.push(new_frame);
-        __gc_stack_bottom = static_cast<void *>(&stack[0] + stack_top);
+        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
     }
     inline void execute_cbegin() {
         int32_t arg_count;
@@ -857,6 +725,7 @@ struct VMState {
         int32_t new_stack_top = stack_top + local_count;
         if (new_stack_top > stack.size())
             stack.resize(std::max(static_cast<size_t>(new_stack_top), stack.size() * 2), 0);
+        check(new_stack_top < MAX_STACK_SIZE, "stack overflow", current_line, ip);
         stack_top = new_stack_top;
 
         // Empty values for new_frame's locals
@@ -864,7 +733,7 @@ struct VMState {
             new_frame.set_local(*this, i, 0);
 
         frames.push(new_frame);
-        __gc_stack_bottom = static_cast<void *>(&stack[0] + stack_top);
+        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
     }
     inline void execute_closure() {
         // std::cout << "CLOSURE\n";
@@ -876,9 +745,10 @@ struct VMState {
         get_int_from_code(&n, code);
         check(n >= 0, "CLOSURE: negative capture count", current_line, ip);
 
-        auto *closure_obj = get_object_content_ptr(alloc_closure(n + 1)); // +1 for code_offset
-        auint* captures_ptr = reinterpret_cast<auint*>(TO_DATA(closure_obj)->contents);
-        captures_ptr[0] = static_cast<auint>(target);
+        aint* args = (aint*)malloc((n + 1) * sizeof(aint)); // +1 for code_offset
+        check(args, "CLOSURE: memory allocation failed", current_line, ip);
+        args[0] = static_cast<aint>(target);
+
         for (int i = 0; i < n; i++) {
             int8_t type;
             get_char_from_code(&type, code); // G: 00, L: 01, A: 02, C: 03
@@ -911,8 +781,10 @@ struct VMState {
                 default:
                     check(false, "invalid varspec for CLOSURE", current_line, ip);
             }
-            captures_ptr[i + 1] = v.repr;
+            args[i + 1] = static_cast<aint>(v.repr);
         }
+        void* closure_obj = Bclosure(args, BOX(n + 1));
+        free(args);
         push(Value::from_ptr(closure_obj));
     }
     inline void execute_callc() {
@@ -976,23 +848,22 @@ struct VMState {
         // std::cout << "TAG\n";
         int32_t tag_index;
         get_int_from_code(&tag_index, code);
+        check(tag_index >= 0 && tag_index < bf->stringtab_size, "TAG: string index out of bounds", current_line, ip);
 
         int32_t expected_elem_count;
         get_int_from_code(&expected_elem_count, code);
+        check(expected_elem_count >= 0, "TAG: negative element count", current_line, ip);
 
-        int32_t result = 0;
+        auint result = 0;
         Value tested_val = pop();
-        if (tested_val.is_sexpr()) {
-            check(expected_elem_count >= 0, "TAG: negative element count", current_line, ip);
-            sexp *sexpr = tested_val.as_sexpr_ptr();
-            check(tag_index >= 0 && tag_index < bf->stringtab_size, "TAG: string index out of bounds", current_line, ip);
-            char *actual_tag = reinterpret_cast<char*>(sexpr->tag);
-            char *expected_tag = get_string(bf, tag_index);
-            if (strcmp(actual_tag, expected_tag) == 0 && LEN(sexpr->data_header) == expected_elem_count)
-                result = 1;
+        if (!tested_val.is_sexpr()) {
+            push(Value::from_int(result));
+            return;
         }
-
-        push(Value::from_int(result));
+        char *expected_tag = get_string(bf, tag_index);
+        auto tag_hash = LtagHash(expected_tag);
+        result = Btag(tested_val.as_ptr(), tag_hash, BOX(expected_elem_count));
+        push(Value::from_repr(result));
     }
     inline void execute_array() {
         // std::cout << "ARRAY\n";
@@ -1000,22 +871,18 @@ struct VMState {
         get_int_from_code(&n, code);
 
         Value v = pop();
-        bool result = false;
-        if (v.is_array())
-            result = (v.size() == static_cast<size_t>(n));
-        push(Value::from_int(result));
-
+        auto result = Barray_patt(v.as_ptr(), BOX(n));
+        push(Value::from_repr(result));
     }
     inline void execute_fail() {
         // std::cout << "FAIL\n";
         int32_t line;
         get_int_from_code(&line, code);
-
         int32_t column;
         get_int_from_code(&column, code);
-
         Value v = pop();
-        std::cerr << "Match failure at line " << line << ", column " << column << "\n";
+
+        Bmatch_failure(v.as_ptr(), fname, line, column);
         exit(1);
     }
     inline void execute_line() {
@@ -1042,7 +909,7 @@ struct VMState {
         // std::cout << "PATT =#array\n";
         Value v = pop();
         auto result = Barray_tag_patt(v.as_ptr());
-        push(Value::from_int(result));
+        push(Value::from_repr(result));
     }
     inline void execute_patt_sexp() {
         // std::cout << "PATT =#sexp\n";
@@ -1071,66 +938,63 @@ struct VMState {
 
     inline void execute_read() {
         // std::cout << "CALL Lread\n";
-        aint value;
-        std::cout << "> ";
-        std::cin >> value;
-        check(!std::cin.fail(), "invalid input", current_line, ip);
-        push(Value::from_int(value));
+        auto value = Lread();
+        push(Value::from_repr(value));
     }
     inline void execute_write() {
         // std::cout << "CALL Lwrite\n";
         Value v = pop();
         check(v.is_integer(), "invalid write argument", current_line, ip);
-        std::cout << v.as_integer() << "\n";
-        push(Value(0));
+        Lwrite(v.repr);
+        push(Value::from_repr(0));
     }
     inline void execute_length() {
         // std::cout << "CALL Llength\n";
         Value v = pop();
         check(v.is_aggregate(), "non-aggregate argument to length builtin", current_line, ip);
-        int32_t len;
-        if (v.is_sexpr())
-            len = v.size();
-        else if (v.is_array())
-            len = v.size();
-        else
-            len = strlen(v.as_string_ptr());
-        push(Value::from_int(len));
+        auto len = Llength(v.as_ptr());
+        push(Value::from_repr(len));
     }
     inline void execute_to_string() {
         // std::cout << "CALL Lstring\n";
         Value v = pop();
-        std::string result = v.to_string();
-        auto *str = get_object_content_ptr(alloc_string(strlen(result.c_str())));
-        strcpy(TO_DATA(str)->contents, result.c_str());
+        aint arg = static_cast<aint>(v.repr);
+        aint args[1] = {arg};
+        void* str = Lstring(args);
         push(Value::from_ptr(str));
     }
     inline void execute_make_array() {
         // std::cout << "CALL Barray\n";
         int32_t n;
         get_int_from_code(&n, code);
-        auto *v = get_object_content_ptr(alloc_array(n));
-        auint* content_ptr = reinterpret_cast<auint*>(TO_DATA(v)->contents);
+        aint* args = (aint*)malloc(n * sizeof(aint));
+        check(args, "BARRAY: memory allocation failed", current_line, ip);
         for (int i = 0; i < n; i++) {
             Value elem = pop();
-            content_ptr[n - i - 1] = elem.repr;
+            args[n - i - 1] = static_cast<aint>(elem.repr);
         }
+
+        void* v = Barray(args, BOX(n));
+        free(args);
         push(Value::from_ptr(v));
     }
 };
 
-void interpret(bytefile *bf) {
+void interpret(bytefile *bf, char *fname) {
     VMState vm;
     vm.bf = bf;
     vm.ip = 0;
     vm.code = bf->code_ptr;
     vm.global_area_size = bf->global_area_size;
     vm.tmp_is_closure = false;
+    vm.fname = fname;
 
+    check(bf->global_area_size + 2 > MAX_STACK_SIZE, "initial stack size exceeds maximum", 0, 0);
     vm.stack.resize(bf->global_area_size + 2, 0); // globals + 2 main arguments
     vm.stack_top = bf->global_area_size + 2;
-    __gc_stack_top = static_cast<void *>(&vm.stack[0]);
-    __gc_stack_bottom = static_cast<void *>(&vm.stack[0] + vm.stack_top);
+    // We use virtual stack here
+    __gc_stack_top = static_cast<size_t *>(&vm.stack[0]);
+    __gc_stack_bottom = static_cast<size_t *>(&vm.stack[0] + vm.stack_top);
 
     // FIXME: should we push global frame here?
 
@@ -1227,9 +1091,10 @@ void free_bytefile(bytefile* file) {
 int main(int argc, char* argv[])
 {
     __init();
+    // TODO: checks for stackoverflow
     try {
         bytefile* f = read_file(argv[1]);
-        interpret(f);
+        interpret(f, argv[1]);
         free_bytefile(f);
         __shutdown();
         return 0;
