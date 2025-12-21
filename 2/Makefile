@@ -80,12 +80,12 @@ $(PERF_TESTS): %: %.lama
 	@LAMA=$(LAMA_RUNTIME) && cd $(PERF_DIR) && $(LAMAC) -b $< && time -f "$@\t%U" $(LAMAI) $@.bc && rm $@.bc
 
 lamai: check-lama-runtime lamai.o
-	@g++ -g -m32 -std=c++17 -O0 -Wno-narrowing \
+	@g++ -m32 -std=c++17 -O2 -Wno-narrowing \
 	    -Wl,--as-needed -Wl,--no-undefined -Wl,--defsym=__start_custom_data=0 -Wl,--defsym=__stop_custom_data=0 \
 		lamai.o $(LAMA_RUNTIME)/runtime.a -o $(LAMAI)
 
 lamai.o:
-	g++ -g -m32 -std=c++17 -O0 -Wno-narrowing -c $(LAMAI_SRC)
+	g++ -m32 -std=c++17 -O2 -Wno-narrowing -c $(LAMAI_SRC)
 
 clean-regression:
 	@rm -f *.bc *.actual.log *.diff
