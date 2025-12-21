@@ -61,15 +61,12 @@ test:
 PERF_DIR=$(PWD)/test/performance
 PERF_LAMA_FILES := $(wildcard $(PERF_DIR)/*.lama)
 PERF_TESTS=$(sort $(basename $(PERF_LAMA_FILES)))
+LAMA_RUNTIME=$(PWD)/Lama/runtime
 
-performance: check-lama-runtime $(PERF_TESTS)
+performance: $(PERF_TESTS)
 
-check-lama-runtime:
-	@if [ -z "$(LAMA_RUNTIME)" ]; then \
-		echo "Please set LAMA_RUNTIME variable to execute performance test:" \
-		echo "export LAMA_RUNTIME=<path to Lama src>/runtime" \
-		exit 1; \
-	fi
+build-lama-runtime:
+	@cp $(PWD)/lama_runtime_makefile $(LAMA_RUNTIME)/Makefile && cd $(LAMA_RUNTIME) && make all
 
 $(PERF_TESTS): %: %.lama
 	@echo "Recursive source-level interpreter:" $@
@@ -79,7 +76,7 @@ $(PERF_TESTS): %: %.lama
 	@echo "Iterative bytecode interpreter:" $@
 	@LAMA=$(LAMA_RUNTIME) && cd $(PERF_DIR) && $(LAMAC) -b $< && time -f "$@\t%U" $(LAMAI) $@.bc && rm $@.bc
 
-lamai: check-lama-runtime lamai.o
+lamai: build-lama-runtime lamai.o
 	@g++ -m32 -std=c++17 -O2 -Wno-narrowing \
 	    -Wl,--as-needed -Wl,--no-undefined -Wl,--defsym=__start_custom_data=0 -Wl,--defsym=__stop_custom_data=0 \
 		lamai.o $(LAMA_RUNTIME)/runtime.a -o $(LAMAI)

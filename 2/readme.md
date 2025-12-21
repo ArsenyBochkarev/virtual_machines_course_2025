@@ -1,10 +1,12 @@
 ### Lama iterative bytecode interpreter
-Make sure `lamac` is installed on your system. Also make sure your runtime was built with `-m32` flag. Please also do `export LAMA_RUNTIME=<path to runtime src>` to the directory of your 32-bit build of runtime.
+Make sure `lamac` is installed on your system. The interpreter requires the runtime built with `-m32` flag.
 
-##### How to build 32-bit runtime
-- Clone Lama src
-- make -C runtime
-- add `-m32` flag to `gc.o` and `runtime.o` targets in `Lama/runtime/Makefile`
+#### Initialize the git submodule
+```bash
+git submodule update --init --recursive
+```
+
+Proper runtime will be built later.
 
 #### Build
 ```bash
@@ -29,6 +31,5 @@ Results for Sort.lama test:
 
 Run performance tests yourself:
 ```bash
-export LAMA_RUNTIME=<path to Lama src>/runtime
 make performance
 ```
