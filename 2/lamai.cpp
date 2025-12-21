@@ -300,8 +300,6 @@ struct VMState {
     char *code;
     int32_t ip;
     int32_t current_line;
-    data *temp_closure_addr;
-    int32_t temp_captured_size;
     int32_t global_area_size;
     bool tmp_is_closure;
 
@@ -310,9 +308,7 @@ struct VMState {
         int32_t base; // local variables index in stack
         int32_t arg_count;
         int32_t local_count;
-        data *closure_addr;
         bool is_closure;
-        // std::vector<aint> saved_args;
 
         Frame(int32_t args, int32_t locals_cnt, int32_t b, bool is_frame_closure = false) 
             : arg_count(args), local_count(locals_cnt), return_address(-1), base(b), is_closure(is_frame_closure) {}
@@ -513,9 +509,9 @@ struct VMState {
         // std::cout << "STI\n";
         Value ref = pop();
         check(ref.is_boxed(), "STI: argument should be reference", current_line, ip);
+
         auint* ref_ptr = reinterpret_cast<auint*>(ref.repr);
         Value val = pop();
-        // auint unboxed = val.as_integer();
         *ref_ptr = val.repr;
 
         push(val);
@@ -676,7 +672,9 @@ struct VMState {
         get_int_from_code(&addr, code);
         Frame *cf = get_current_frame();
 
-        // check(addr >= 0 && addr < cf->captured_vars->size(), "LD: captured index out of bounds", current_line, ip);
+        Value closure_val = stack[cf->base - cf->arg_count - 1];
+        check(addr >= 0 && addr < closure_val.size(), "LD: captured index out of bounds", current_line, ip);
+
         Value target = cf->get_captured(*this, addr);
         push(target);
     }
@@ -699,7 +697,7 @@ struct VMState {
 
         Frame *cf = get_current_frame();
         check(addr >= 0 && addr < cf->local_count, "LDA: local index out of bounds", current_line, ip);
-        auint *target = cf->get_local_ptr((*this), addr);
+        auint *target = cf->get_local_ptr(*this, addr);
 
         push(Value::from_ptr(target));
     }
@@ -720,7 +718,8 @@ struct VMState {
         get_int_from_code(&addr, code);
 
         Frame *cf = get_current_frame();
-        // check(addr >= 0 && addr < cf->captured_vars->size(), "LDA: captured index out of bounds", current_line, ip);
+        Value closure_val = stack[cf->base - cf->arg_count - 1];
+        check(addr >= 0 && addr < closure_val.size(), "LDA: captured index out of bounds", current_line, ip);
         auint *target = cf->get_captured_ptr(*this, addr);
         push(Value::from_ptr(target));
     }
@@ -733,10 +732,8 @@ struct VMState {
         get_int_from_code(&addr, code);
 
         check(addr >= 0 && addr < global_area_size, "ST: global index out of bounds", current_line, ip);
-        // aint unboxed = v.as_integer();
         stack[addr] = v.repr;
 
-        // Value to_be_pushed = Value::from_int(unboxed);
         push(v);
     }
     inline void execute_st_local() {
@@ -747,7 +744,6 @@ struct VMState {
 
         Frame *cf = get_current_frame();
         check(addr >= 0 && addr < cf->local_count, "ST: local index out of bounds", current_line, ip);
-        // aint unboxed = v.as_integer();
         cf->set_local(*this, addr, v);
 
         push(v);
@@ -760,7 +756,6 @@ struct VMState {
 
         Frame *cf = get_current_frame();
         check(addr >= 0 && addr < cf->arg_count, "ST: argument index out of bounds", current_line, ip);
-        // aint unboxed = v.as_integer();
         cf->set_arg(*this, addr, v);
 
         push(v);
@@ -768,13 +763,12 @@ struct VMState {
     inline void execute_st_captured() {
         // std::cout << "ST C\n";
         Value v = pop();
-        // Value v_copy = v;
         int32_t addr;
         get_int_from_code(&addr, code);
 
         Frame *cf = get_current_frame();
-        // check(addr >= 0 && addr < cf->captured_vars->size(), "ST: captured index out of bounds", current_line, ip);
-        // aint unboxed = v.as_integer();
+        Value closure_val = stack[cf->base - cf->arg_count - 1];
+        check(addr >= 0 && addr < closure_val.size(), "ST: captured index out of bounds", current_line, ip);
         cf->set_captured(*this, addr, v);
 
         push(v);
@@ -820,11 +814,6 @@ struct VMState {
         // ...
         // - arg 0
 
-        // if (prev_frame) {
-        //     check(arg_count == prev_frame->saved_args.size(), "saved args length != arg_count", current_line, ip);
-        //     for (int i = 0; i < arg_count; i++)
-        //         new_frame.set_arg(*this, i, prev_frame->saved_args[i]);
-        // }
         Frame new_frame(arg_count, local_count, base, tmp_is_closure);
         tmp_is_closure = false;
 
@@ -858,11 +847,6 @@ struct VMState {
         // - arg N-2
         // ...
         // - arg 0
-        // if (prev_frame) {
-        //     check(arg_count == prev_frame->saved_args.size(), "saved args length != arg_count", current_line, ip);
-        //     for (int i = 0; i < arg_count; i++)
-        //         new_frame.set_arg(*this, i, prev_frame->saved_args[i]);
-        // }
 
         int32_t new_stack_top = stack_top + local_count;
         if (new_stack_top > stack.size())
@@ -872,11 +856,8 @@ struct VMState {
         // Empty values for new_frame's locals
         for (int i = 0; i < local_count; i++)
             new_frame.set_local(*this, i, 0);
-        frames.push(new_frame);
 
-        // if (temp_closure_addr)
-        //     new_frame.closure_addr = temp_closure_addr;
-        // temp_closure_addr = nullptr;
+        frames.push(new_frame);
         __gc_stack_bottom = static_cast<void *>(&stack[0] + stack_top);
     }
     inline void execute_closure() {
@@ -933,20 +914,13 @@ struct VMState {
         // - arg 0
         // - closure
 
-        // current_frame->saved_args.clear();
-        // for (int i = 0; i < n; i++)
-        //     current_frame->saved_args.push_back(pop().as_integer());
-        // std::reverse(current_frame->saved_args.begin(), current_frame->saved_args.end());
-
-        Value closure_val = stack[stack_top - n - 1];
+        Value closure_val = peek(n);
         check(closure_val.is_closure(), "first argument to CALLC must be closure", current_line, ip);
         data* closure = TO_DATA(closure_val.as_ptr());
         auint* captures = reinterpret_cast<auint*>(closure->contents);
 
-        // Also save captured variables created in CLOSURE bytecode
-        // temp_closure_addr = closure;
-
         // Do a JMP, basically
+        // All captured variables should already be on the stack
         int32_t target = static_cast<int32_t>(captures[0]);
         check(target <= code_size, "incorrect CALLC destination", current_line, ip);
         ip = target;
@@ -966,11 +940,6 @@ struct VMState {
 
         Frame *current_frame = get_current_frame();
         current_frame->return_address = ip;
-
-        // current_frame->saved_args.clear();
-        // for (int i = 0; i < n; i++)
-        //     current_frame->saved_args.push_back(pop().as_integer());
-        // std::reverse(current_frame->saved_args.begin(), current_frame->saved_args.end());
 
         // Do a JMP, basically
         check(target <= code_size, "incorrect call destination", current_line, ip);
@@ -1142,14 +1111,6 @@ void interpret(bytefile *bf) {
     vm.code = bf->code_ptr;
     vm.global_area_size = bf->global_area_size;
     vm.tmp_is_closure = false;
-
-    // Stack structure:
-    // - GLOBALS
-    // - ARGS:
-    //   - `main` two arguments
-    //   - other functions arguments
-    // - LOCALS
-    // - OPERANDS
 
     vm.stack.resize(bf->global_area_size + 2, 0); // globals + 2 main arguments
     vm.stack_top = bf->global_area_size + 2;
