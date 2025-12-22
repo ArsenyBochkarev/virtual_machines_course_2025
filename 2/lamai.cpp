@@ -989,7 +989,7 @@ void interpret(bytefile *bf, char *fname) {
     vm.tmp_is_closure = false;
     vm.fname = fname;
 
-    check(bf->global_area_size + 2 > MAX_STACK_SIZE, "initial stack size exceeds maximum", 0, 0);
+    check(bf->global_area_size + 2 < MAX_STACK_SIZE, "initial stack size exceeds maximum", 0, 0);
     vm.stack.resize(bf->global_area_size + 2, 0); // globals + 2 main arguments
     vm.stack_top = bf->global_area_size + 2;
     // We use virtual stack here
