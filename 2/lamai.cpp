@@ -24,7 +24,6 @@ typedef struct {
     char *string_ptr;              /* A pointer to the beginning of the string table */
     int  *public_ptr;              /* A pointer to the beginning of publics table    */
     char *code_ptr;                /* A pointer to the bytecode itself               */
-    int  *global_ptr;              /* A pointer to the global area                   */
     int   stringtab_size;          /* The size (in bytes) of the string table        */
     int   global_area_size;        /* The size (in words) of global area             */
     int   public_symbols_number;   /* The number of public symbols                   */
@@ -81,7 +80,6 @@ bytefile* read_file(char *fname) {
     file->string_ptr = &file->buffer [file->public_symbols_number * 2 * sizeof(int)];
     file->public_ptr = (int*) file->buffer;
     file->code_ptr = &file->string_ptr [file->stringtab_size];
-    file->global_ptr = (int*) malloc (file->global_area_size * sizeof (int));
 
     // TODO: Think if this is really needed
     // CUSTOM CODE BELOW:
@@ -1081,11 +1079,8 @@ void interpret(bytefile *bf, char *fname) {
 }
 
 void free_bytefile(bytefile* file) {
-    if (file) {
-        if (file->global_ptr)
-            free(file->global_ptr);
+    if (file)
         free(file);
-    }
 }
 
 int main(int argc, char* argv[])
