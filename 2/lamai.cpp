@@ -114,7 +114,6 @@ struct Value {
 
 struct VMState {
     alignas(16) auint stack[MAX_STACK_SIZE];
-    int32_t stack_top;
     bytefile *bf;
     char *fname;
     char *code;
@@ -134,13 +133,13 @@ struct VMState {
         Frame(int32_t args, int32_t locals_cnt, int32_t b, bool is_frame_closure = false) 
             : arg_count(args), local_count(locals_cnt), return_address(-1), base(b), is_closure(is_frame_closure) {}
         auint get_local(VMState& vm, int32_t index) {
-            return vm.stack[base + index];
+            return __gc_stack_top[base+index];
         }
         auint *get_local_ptr(VMState& vm, int32_t index) {
-            return &vm.stack[base + index];
+            return __gc_stack_top + base + index;
         }
         void set_local(VMState& vm, int32_t index, const Value &v) {
-            vm.stack[base + index] = v.repr;
+            __gc_stack_top[base+index] = v.repr;
         }
 
         auint get_arg(VMState& vm, int32_t index) {
@@ -184,21 +183,22 @@ struct VMState {
     int32_t frames_top;
     Frame frames[MAX_FRAMES_NUM];
 
+    inline size_t stack_size() {
+        return __gc_stack_bottom - __gc_stack_top;
+    }
     inline void push(Value v) {
-        check(stack_top + 1 < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
-        stack[stack_top++] = v.repr;
-        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
+        check(stack_size() + 1 < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
+        *(__gc_stack_bottom++) = v.repr;
     }
     inline Value pop() {
-        check(stack_top > 0, "stack underflow. Offset: 0x%x\n", ip);
-        Value v{stack[stack_top-1]};
-        stack_top--;
-        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
+        check(stack_size() > 0, "stack underflow. Offset: 0x%x\n", ip);
+        Value v{*(__gc_stack_bottom-1)};
+        __gc_stack_bottom--;
         return v;
     }
     inline Value peek(int offset = 0) {
-        assert(stack_top - offset - 1 >= 0);
-        return Value{stack[stack_top - offset - 1]};
+        assert(__gc_stack_bottom - offset - 1 >= __gc_stack_top);
+        return Value{*(__gc_stack_bottom - offset - 1)};
     }
 
     inline auint get_global(int idx) const {
@@ -378,9 +378,9 @@ struct VMState {
         Value ret_val = pop(); // Not really necessary, but do this just to support the format
 
         Frame *current_frame = get_current_frame();
-        stack_top = current_frame->base - current_frame->arg_count;
+        auto prev_stack_top = current_frame->base - current_frame->arg_count;
         if (current_frame->is_closure)
-            stack_top--;
+            prev_stack_top--;
 
         pop_frame();
         if (!frames_top)
@@ -388,7 +388,7 @@ struct VMState {
 
         Frame* caller_frame = get_current_frame();
         ip = caller_frame->return_address;
-        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
+        __gc_stack_bottom = static_cast<size_t *>(__gc_stack_top + prev_stack_top);
 
         push(ret_val); // TODO: remove this and `pop` above if we need some acceleration
         return false;
@@ -398,9 +398,9 @@ struct VMState {
         Value ret_val = pop(); // Not really necessary, but do this just to support the format
 
         Frame *current_frame = get_current_frame();
-        stack_top = current_frame->base - current_frame->arg_count;
+        auto prev_stack_top = current_frame->base - current_frame->arg_count;
         if (current_frame->is_closure)
-            stack_top--;
+            prev_stack_top--;
 
         pop_frame();
         if (!frames_top)
@@ -408,7 +408,7 @@ struct VMState {
 
         Frame* caller_frame = get_current_frame();
         ip = caller_frame->return_address;
-        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
+        __gc_stack_bottom = static_cast<size_t *>(__gc_stack_top + prev_stack_top);
 
         push(ret_val); // TODO: remove this and `pop` above if we need some acceleration
         return false;
@@ -615,7 +615,7 @@ struct VMState {
         check(arg_count >= 0 && local_count >= 0, "BEGIN: incorrect args or locals count. Offset: 0x%x\n", ip);
 
         Frame *prev_frame = get_current_frame();
-        int32_t base = stack_top; // base should point to local variables
+        int32_t base = stack_size(); // base is the index in stack pointing to local variables
         // All args are already on the stack:
         // - arg N-1
         // - arg N-2
@@ -625,16 +625,14 @@ struct VMState {
         Frame new_frame(arg_count, local_count, base, tmp_is_closure);
         tmp_is_closure = false;
 
-        int32_t new_stack_top = stack_top + local_count;
-        check(new_stack_top < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
-        stack_top = new_stack_top;
+        check(stack_size() + local_count < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
+        __gc_stack_bottom = __gc_stack_bottom + local_count;
 
         // Empty values for new_frame's locals
         for (int i = 0; i < local_count; i++)
             new_frame.set_local(*this, i, 0);
 
         push_frame(new_frame);
-        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
     }
     inline void execute_cbegin() {
         int32_t arg_count;
@@ -644,7 +642,7 @@ struct VMState {
         check(arg_count >= 0 && local_count >= 0, "CBEGIN: incorrect args or locals count. Offset: 0x%x\n", ip);
 
         Frame *prev_frame = get_current_frame();
-        int32_t base = stack_top;
+        int32_t base = stack_size(); // base is the index in stack pointing to local variables
         // - closure: stack[base - arg_count - 1]
         // - args:    stack[base - arg_count] ... stack[base - 1]
         // - locals:  stack[base] ... stack[base + local_count - 1]
@@ -656,16 +654,14 @@ struct VMState {
         // ...
         // - arg 0
 
-        int32_t new_stack_top = stack_top + local_count;
-        check(new_stack_top < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
-        stack_top = new_stack_top;
+        check(stack_size() + local_count < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
+        __gc_stack_bottom = __gc_stack_bottom + local_count;
 
         // Empty values for new_frame's locals
         for (int i = 0; i < local_count; i++)
             new_frame.set_local(*this, i, 0);
 
         push_frame(new_frame);
-        __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
     }
     inline void execute_closure() {
         // std::cout << "CLOSURE\n";
@@ -921,10 +917,9 @@ void interpret(bytefile *bf, char *fname) {
     vm.frames_top = 0;
 
     check(bf->global_area_size + 2 < MAX_STACK_SIZE, "initial stack size exceeds maximum. Offset: 0x%x\n", 0);
-    vm.stack_top = bf->global_area_size + 2;
     // We use virtual stack here
     __gc_stack_top = static_cast<size_t *>(&vm.stack[0]);
-    __gc_stack_bottom = static_cast<size_t *>(&vm.stack[0] + vm.stack_top);
+    __gc_stack_bottom = static_cast<size_t *>(&vm.stack[bf->global_area_size + 2]);
 
     // FIXME: should we push global frame here?
 
