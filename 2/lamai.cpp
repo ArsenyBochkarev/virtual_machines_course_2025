@@ -374,8 +374,8 @@ struct VMState {
         ip = loc;
     }
     inline bool execute_end() {
-        // std::cout << "RET\n";
-        Value ret_val = pop(); // Not really necessary, but do this just to support the format
+        // std::cout << "RET/END\n";
+        Value ret_val = pop();
 
         Frame *current_frame = get_current_frame();
         auto prev_stack_top = current_frame->base - current_frame->arg_count;
@@ -390,27 +390,7 @@ struct VMState {
         ip = caller_frame->return_address;
         __gc_stack_bottom = static_cast<size_t *>(__gc_stack_top + prev_stack_top);
 
-        push(ret_val); // TODO: remove this and `pop` above if we need some acceleration
-        return false;
-    }
-    inline bool execute_ret() {
-        // std::cout << "RET\n";
-        Value ret_val = pop(); // Not really necessary, but do this just to support the format
-
-        Frame *current_frame = get_current_frame();
-        auto prev_stack_top = current_frame->base - current_frame->arg_count;
-        if (current_frame->is_closure)
-            prev_stack_top--;
-
-        pop_frame();
-        if (!frames_top)
-            return true;
-
-        Frame* caller_frame = get_current_frame();
-        ip = caller_frame->return_address;
-        __gc_stack_bottom = static_cast<size_t *>(__gc_stack_top + prev_stack_top);
-
-        push(ret_val); // TODO: remove this and `pop` above if we need some acceleration
+        push(ret_val);
         return false;
     }
     inline void execute_drop() {
@@ -579,31 +559,17 @@ struct VMState {
         push(v);
     }
 
-    inline void execute_cjmpz() {
-        // std::cout << "CJMPz\n";
+    inline void execute_cjmp(bool is_nz = false) {
+        // std::cout << "CJMPz/CJMPnz\n";
         int32_t loc;
         get_int_from_code(&loc, code);
-        check(loc <= code_size, "incorrect CJMPz destination. Offset: 0x%x\n", ip);
+        check(loc <= code_size, "incorrect CJMPz/CJMPnz destination. Offset: 0x%x\n", ip);
 
         Value cond = pop();
-        check(cond.is_integer(), "CJMPz argument should be integer. Offset: 0x%x\n", ip);
+        check(cond.is_integer(), "CJMPz/CJMPnz argument should be integer. Offset: 0x%x\n", ip);
         int32_t int_cond = cond.as_integer();
-        if (!int_cond) {
-            check(loc <= code_size, "incorrect jump destination. Offset: 0x%x\n", ip);
-            ip = loc;
-        }
-    }
-    inline void execute_cjmpnz() {
-        // std::cout << "CJMPnz\n";
-        int32_t loc;
-        get_int_from_code(&loc, code);
-        check(loc <= code_size, "incorrect CJMPnz destination. Offset: 0x%x\n", ip);
-
-        Value cond = pop();
-        check(cond.is_integer(), "CJMPnz argument should be integer. Offset: 0x%x\n", ip);
-        int32_t int_cond = cond.as_integer();
-        if (int_cond) {
-            check(loc <= code_size, "incorrect jump destination. Offset: 0x%x\n", ip);
+        if (int_cond == is_nz) /*((int_cond && is_nz) || (!int_cond && !is_nz))*/ {
+            check(loc <= code_size, "incorrect CJMPz/CJMPnz destination. Offset: 0x%x\n", ip);
             ip = loc;
         }
     }
@@ -920,14 +886,8 @@ void interpret(bytefile *bf, char *fname) {
     __gc_stack_top = static_cast<size_t *>(&vm.stack[0]);
     __gc_stack_bottom = static_cast<size_t *>(&vm.stack[bf->global_area_size + 2]);
 
-    // FIXME: should we push global frame here?
-
     while(true) {
         uint8_t op = static_cast<uint8_t>(vm.code[vm.ip++]);
-        // std::stringstream str_stream;
-        // str_stream << std::hex << static_cast<int>(op);
-        // std::cout << "op = " << str_stream.str() << "\n";
-
         switch (op) {
             case Bytecode::CONST: vm.execute_const(); break;
             case Bytecode::STRING: vm.execute_string(); break;
@@ -935,12 +895,9 @@ void interpret(bytefile *bf, char *fname) {
             case Bytecode::STI: vm.execute_sti(); break;
             case Bytecode::STA: vm.execute_sta(); break;
             case Bytecode::JMP: vm.execute_jmp(); break;
+            case Bytecode::RET:
             case Bytecode::END:
                 if (vm.execute_end())
-                    return;
-                break;
-            case Bytecode::RET:
-                if (vm.execute_ret())
                     return;
                 break;
             case Bytecode::DROP: vm.execute_drop(); break;
@@ -963,8 +920,8 @@ void interpret(bytefile *bf, char *fname) {
             case Bytecode::ST_ARGUMENT: vm.execute_st_argument(); break;
             case Bytecode::ST_CAPTURED: vm.execute_st_captured(); break;
 
-            case Bytecode::CJMPZ: vm.execute_cjmpz(); break;
-            case Bytecode::CJMPNZ: vm.execute_cjmpnz(); break;
+            case Bytecode::CJMPZ: vm.execute_cjmp(); break;
+            case Bytecode::CJMPNZ: vm.execute_cjmp(/*is_nz=*/true); break;
             case Bytecode::BEGIN: vm.execute_begin(); break;
             case Bytecode::CBEGIN: vm.execute_cbegin(); break;
             case Bytecode::CLOSURE: vm.execute_closure(); break;
