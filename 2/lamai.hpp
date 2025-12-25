@@ -3,7 +3,10 @@
 
 #include <cstdint>
 
-constexpr uint32_t MAX_STACK_SIZE = 0x7fffffffU;
+constexpr uint32_t MAX_STACK_SIZE = 10000;
+constexpr uint32_t MAX_FRAMES_NUM = 10000;
+constexpr uint32_t MAX_ARGS_NUM = 50;
+constexpr uint32_t MAX_FILE_SIZE = 1024 * 1024 * 3; // 3 mb
 
 namespace Bytecode {
     constexpr uint8_t BINOP_HIGH   = 0x00;

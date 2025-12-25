@@ -1,53 +1,17 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stack>
-#include <memory>
-#include <cassert>
-#include <sstream>
 #include <errno.h>
-#include <iostream>
-#include <malloc.h>
 #include <cstring>
-#include <vector>
-#include <algorithm>
-#include <string>
-#include <variant>
 #include "lamai.hpp"
 #include "runtime.hpp"
 
 extern size_t* __gc_stack_top;
 extern size_t* __gc_stack_bottom;
 
-class RuntimeError : public std::exception {
-private:
-    std::string message;
-    int32_t line_number;
-    int32_t bytecode_offset;
-
-public:
-    RuntimeError(const std::string& msg, int32_t ln, int32_t offset)
-        : message(msg), line_number(ln), bytecode_offset(offset) {
-            std::stringstream str_stream;
-            str_stream << std::hex << bytecode_offset;
-            message += ". Line: " + std::to_string(line_number) + ", bytecode offset: 0x" + str_stream.str();
-    }
-
-    const char* what() const noexcept override {
-        return message.c_str();
-    }
-
-private:
-    static std::string to_hex(int n) {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%08x", n);
-        return std::string(buf);
-    }
-};
-
-static inline void check(bool condition, const char *msg, int32_t line_number, int32_t offset) {
+static inline void check(bool condition, char *msg, int32_t offset) {
     if (!condition)
-        throw RuntimeError(msg, line_number, offset);
+        failure(msg, offset);
 }
 
 /* The unpacked representation of bytecode file */
@@ -58,7 +22,7 @@ typedef struct {
     int32_t   stringtab_size;          /* The size (in bytes) of the string table        */
     int32_t   global_area_size;        /* The size (in words) of global area             */
     int32_t   public_symbols_number;   /* The number of public symbols                   */
-    char  buffer[0];               
+    char  buffer[MAX_FILE_SIZE];
 } bytefile;
 
 /* Gets a string from a string table by an index */
@@ -69,10 +33,9 @@ char* get_string(bytefile *f, int pos) {
 static int32_t code_size = -1;
 
 /* Reads a binary bytecode file by name and unpacks it */
-bytefile* read_file(char *fname) {
+bytefile* read_file(char *fname, bytefile *file) {
     FILE *f = fopen (fname, "rb");
     long size;
-    bytefile *file;
 
     if (!f) {
         fprintf(stderr, "%s\n", strerror (errno));
@@ -92,48 +55,25 @@ bytefile* read_file(char *fname) {
         exit(1);
     }
 
-    file = (bytefile*) malloc (sizeof(int32_t)*4 + size);
-    if (!file) {
-        fprintf(stderr, "*** FAILURE: unable to allocate memory.\n");
-        fclose(f);
-        exit(1);
-    }
-
     rewind (f);
     if (size != fread (&file->stringtab_size, 1, size, f)) {
         fprintf(stderr, "%s\n", strerror (errno));
-        free(file);
         fclose(f);
         exit(1);
     }
     fclose (f);
 
-    check(file->public_symbols_number > 0, "corrupted public_symbols_number in file", 0, 0);
+    check(file->public_symbols_number > 0, "corrupted public_symbols_number in file. Offset: 0x%x", 0);
+    check(size + sizeof(int32_t)*4 < MAX_FILE_SIZE, "Input file too big. Offset: 0x%x", 0);
     file->string_ptr = &file->buffer [file->public_symbols_number * 2 * sizeof(int32_t)];
     file->public_ptr = (int32_t*) file->buffer;
     file->code_ptr = &file->string_ptr [file->stringtab_size];
 
-    // TODO: Think if this is really needed
-    // CUSTOM CODE BELOW:
     code_size = size - file->public_symbols_number * 2 * sizeof(int32_t) + file->stringtab_size;
 
     return file;
 }
 
-struct Value;
-
-struct SExpr {
-    std::string tag;
-    std::vector<Value> elements;
-};
-struct ValueWrapper {
-    Value *data;
-};
-struct Array {
-    std::vector<Value> elements;
-};
-
-constexpr auint uc = static_cast<auint>(-1) >> 1;
 struct Value {
     auint repr;
 
@@ -178,7 +118,7 @@ struct Value {
 };
 
 struct VMState {
-    std::vector<auint> stack;
+    alignas(16) auint stack[MAX_STACK_SIZE];
     int32_t stack_top;
     bytefile *bf;
     char *fname;
@@ -195,6 +135,7 @@ struct VMState {
         int32_t local_count;
         bool is_closure;
 
+        Frame() : arg_count(-1), local_count(-1), return_address(-1), base(-1), is_closure(false) {}
         Frame(int32_t args, int32_t locals_cnt, int32_t b, bool is_frame_closure = false) 
             : arg_count(args), local_count(locals_cnt), return_address(-1), base(b), is_closure(is_frame_closure) {}
         auint get_local(VMState& vm, int32_t index) {
@@ -236,17 +177,25 @@ struct VMState {
             captures[index + 1] = v.repr;
         }
     };
-    std::stack<Frame> frames;
+
+    inline void push_frame(const Frame &f) {
+        check(frames_top < MAX_FRAMES_NUM, "frames overflow. Offset: 0x%x\n", ip);
+        frames[frames_top++] = f;
+    }
+    inline void pop_frame() {
+        check(frames_top >= 0, "frames underflow. Offset: 0x%x\n", ip);
+        frames_top--;
+    }
+    int32_t frames_top;
+    Frame frames[MAX_FRAMES_NUM];
 
     inline void push(Value v) {
-        check(stack_top < MAX_STACK_SIZE, "stack overflow", current_line, ip);
-        if (stack_top >= stack.size())
-            stack.resize(stack.size() * 2);
+        check(stack_top + 1 < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
         stack[stack_top++] = v.repr;
         __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
     }
     inline Value pop() {
-        check(stack_top > 0, "stack underflow", current_line, ip);
+        check(stack_top > 0, "stack underflow. Offset: 0x%x\n", ip);
         Value v{stack[stack_top-1]};
         stack_top--;
         __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
@@ -265,18 +214,18 @@ struct VMState {
     }
 
     inline void get_int_from_code(int32_t *v, char* code) {
-        check(ip + sizeof(int32_t) <= code_size, "reading beyond code segment", current_line, ip);
+        check(ip + sizeof(int32_t) <= code_size, "reading beyond code segment. Offset: 0x%x\n", ip);
         std::memcpy(v, code + ip, sizeof(int32_t));
         ip += sizeof(int32_t);
     }
     inline void get_char_from_code(int8_t *v, char* code) {
-        check(ip + sizeof(int8_t) <= code_size, "reading beyond code segment", current_line, ip);
+        check(ip + sizeof(int8_t) <= code_size, "reading beyond code segment. Offset: 0x%x\n", ip);
         std::memcpy(v, code + ip, sizeof(int8_t));
         ip += sizeof(int8_t);
     }
 
     inline Frame *get_current_frame() {
-        return frames.empty() ? nullptr : &frames.top();
+        return (!frames_top) ? nullptr : &frames[frames_top-1];
     }
 
     inline void execute_binop(uint8_t op) {
@@ -285,7 +234,7 @@ struct VMState {
         Value b = pop();
         Value a = pop();
         if (op == Bytecode::Binop::LOW_EQ) {
-            check(b.is_integer() || a.is_integer(), "one of the operands must be integer", current_line, ip);
+            check(b.is_integer() || a.is_integer(), "one of the operands must be integer. Offset: 0x%x\n", ip);
             if (a.is_integer() && b.is_integer()) {
                 int32_t b_int = b.as_integer();
                 int32_t a_int = a.as_integer();
@@ -294,9 +243,9 @@ struct VMState {
             push(Value::from_int(res));
             return;
         }
-        check(b.is_integer(), "operand must be integer", current_line, ip);
+        check(b.is_integer(), "operand must be integer. Offset: 0x%x\n", ip);
         int32_t b_int = b.as_integer();
-        check(a.is_integer(), "operand must be integer", current_line, ip);
+        check(a.is_integer(), "operand must be integer. Offset: 0x%x\n", ip);
         int32_t a_int = a.as_integer();
 
         switch (op) {
@@ -319,14 +268,14 @@ struct VMState {
                 break;
             }
             case Bytecode::Binop::LOW_DIV: { // DIV
-                check(b_int != 0, "division by zero", current_line, ip);
+                check(b_int != 0, "division by zero. Offset: 0x%x\n", ip);
                 // Division with wraparound through 64-bit values
                 int64_t temp = static_cast<int64_t>(a_int) / static_cast<int64_t>(b_int);
                 res = static_cast<int32_t>(temp);
                 break;
             }
             case Bytecode::Binop::LOW_MOD: { // MOD
-                check(b_int != 0, "division by zero", current_line, ip);
+                check(b_int != 0, "division by zero. Offset: 0x%x\n", ip);
                 // Division remainder with wraparound through 64-bit values
                 int64_t temp = static_cast<int64_t>(a_int) % static_cast<int64_t>(b_int);
                 res = static_cast<int32_t>(temp);
@@ -368,7 +317,7 @@ struct VMState {
         // std::cout << "STRING\n";
         int32_t string_index;
         get_int_from_code(&string_index, code); // Get string index from stack
-        check(string_index >= 0 && string_index < bf->stringtab_size, "STRING: string index out of bounds", current_line, ip);
+        check(string_index >= 0 && string_index < bf->stringtab_size, "STRING: string index out of bounds. Offset: 0x%x\n", ip);
         char *str = get_string(bf, string_index);
         auto *v = Bstring((aint*)&str);
         push(Value::from_ptr(v));
@@ -379,13 +328,13 @@ struct VMState {
         get_int_from_code(&tag_index, code);
         int32_t elem_count;
         get_int_from_code(&elem_count, code);
-        check(elem_count >= 0, "SEXP: negative element count", current_line, ip);
+        check(elem_count >= 0, "SEXP: negative element count. Offset: 0x%x\n", ip);
+        check(elem_count < MAX_ARGS_NUM, "SEXP: too many elements. Offset: 0x%x\n", ip);
 
-        check(tag_index >= 0 && tag_index < bf->stringtab_size, "SEXP: tag index out of bounds", current_line, ip);
+        check(tag_index >= 0 && tag_index < bf->stringtab_size, "SEXP: tag index out of bounds. Offset: 0x%x\n", ip);
         char *tag = get_string(bf, tag_index);
         aint tag_hash = LtagHash(tag);
-        aint* args = (aint*)malloc((elem_count + 1) * sizeof(aint));
-        check(args, "SEXP: memory allocation failed", current_line, ip);
+        aint args[MAX_ARGS_NUM];
         for (int i = 0; i < elem_count; i++) {
             Value elem = pop();
             args[elem_count - i - 1] = (aint)elem.repr;
@@ -393,13 +342,12 @@ struct VMState {
         args[elem_count] = tag_hash;
         void* v = Bsexp(args, BOX(elem_count + 1));
 
-        free(args);
         push(Value::from_ptr(v));
     }
     inline void execute_sti() {
         // std::cout << "STI\n";
         Value ref = pop();
-        check(ref.is_boxed(), "STI: argument should be reference", current_line, ip);
+        check(ref.is_boxed(), "STI: argument should be reference. Offset: 0x%x\n", ip);
 
         auint* ref_ptr = reinterpret_cast<auint*>(ref.repr);
         Value val = pop();
@@ -414,11 +362,11 @@ struct VMState {
         if (idx_val.is_integer()) {
             int32_t idx = idx_val.as_integer();
             Value agg = pop();
-            check(agg.is_aggregate(), "STA: non-aggregate argument", current_line, ip);
-            check(idx >= 0 && idx < agg.size(), "STA: aggregate index out of bounds", current_line, ip);
+            check(agg.is_aggregate(), "STA: non-aggregate argument. Offset: 0x%x\n", ip);
+            check(idx >= 0 && idx < agg.size(), "STA: aggregate index out of bounds. Offset: 0x%x\n", ip);
             Bsta(agg.as_ptr(), idx_val.repr, val.as_ptr());
         } else {
-            check(idx_val.is_boxed(), "STA: second operand should be reference", current_line, ip);
+            check(idx_val.is_boxed(), "STA: second operand should be reference. Offset: 0x%x\n", ip);
             Bsta(idx_val.as_ptr(), idx_val.repr, val.as_ptr());
         }
         push(val);
@@ -427,7 +375,7 @@ struct VMState {
         // std::cout << "JMP\n";
         int32_t loc;
         get_int_from_code(&loc, code);
-        check(loc <= code_size, "incorrect jump destination", current_line, ip);
+        check(loc <= code_size, "incorrect jump destination. Offset: 0x%x\n", ip);
         ip = loc;
     }
     inline bool execute_end() {
@@ -439,8 +387,8 @@ struct VMState {
         if (current_frame->is_closure)
             stack_top--;
 
-        frames.pop();
-        if (frames.empty())
+        pop_frame();
+        if (!frames_top)
             return true;
 
         Frame* caller_frame = get_current_frame();
@@ -459,8 +407,8 @@ struct VMState {
         if (current_frame->is_closure)
             stack_top--;
 
-        frames.pop();
-        if (frames.empty())
+        pop_frame();
+        if (!frames_top)
             return true;
 
         Frame* caller_frame = get_current_frame();
@@ -488,9 +436,9 @@ struct VMState {
     inline void execute_elem() {
         // std::cout << "ELEM\n";
         Value index = pop();
-        check(index.is_integer(), "Element's index must be integer", current_line, ip);
+        check(index.is_integer(), "Element's index must be integer. Offset: 0x%x\n", ip);
         Value agg = pop();
-        check(agg.is_aggregate(), "Aggregate must be string, SExpr, or an Array", current_line, ip);
+        check(agg.is_aggregate(), "Aggregate must be string, SExpr, or an Array. Offset: 0x%x\n", ip);
         auto *result = Belem(agg.as_ptr(), index.repr);
         push(Value::from_ptr(result));
     }
@@ -501,7 +449,7 @@ struct VMState {
         int32_t addr;
         get_int_from_code(&addr, code);
 
-        check(addr >= 0 && addr < global_area_size, "LD: global index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < global_area_size, "LD: global index out of bounds. Offset: 0x%x\n", ip);
         Value target = Value::from_repr(get_global(addr));
 
         push(target);
@@ -512,7 +460,7 @@ struct VMState {
         get_int_from_code(&addr, code);
         Frame *cf = get_current_frame();
 
-        check(addr >= 0 && addr < cf->local_count, "LD: local index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < cf->local_count, "LD: local index out of bounds. Offset: 0x%x\n", ip);
         Value target = Value::from_repr(cf->get_local(*this, addr));
 
         push(target);
@@ -523,7 +471,7 @@ struct VMState {
         get_int_from_code(&addr, code);
         Frame *cf = get_current_frame();
 
-        check(addr >= 0 && addr < cf->arg_count, "LD: argument index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < cf->arg_count, "LD: argument index out of bounds. Offset: 0x%x\n", ip);
         Value target = cf->get_arg(*this, addr);
 
         push(target);
@@ -535,7 +483,7 @@ struct VMState {
         Frame *cf = get_current_frame();
 
         Value closure_val = stack[cf->base - cf->arg_count - 1];
-        check(addr >= 0 && addr < closure_val.size(), "LD: captured index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < closure_val.size(), "LD: captured index out of bounds. Offset: 0x%x\n", ip);
 
         Value target = cf->get_captured(*this, addr);
         push(target);
@@ -547,7 +495,7 @@ struct VMState {
         int32_t addr;
         get_int_from_code(&addr, code);
 
-        check(addr >= 0 && addr < global_area_size, "LDA: global index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < global_area_size, "LDA: global index out of bounds. Offset: 0x%x\n", ip);
         auint *target = get_global_ptr(addr);
 
         push(Value::from_ptr(target));
@@ -558,7 +506,7 @@ struct VMState {
         get_int_from_code(&addr, code);
 
         Frame *cf = get_current_frame();
-        check(addr >= 0 && addr < cf->local_count, "LDA: local index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < cf->local_count, "LDA: local index out of bounds. Offset: 0x%x\n", ip);
         auint *target = cf->get_local_ptr(*this, addr);
 
         push(Value::from_ptr(target));
@@ -569,7 +517,7 @@ struct VMState {
         get_int_from_code(&addr, code);
 
         Frame *cf = get_current_frame();
-        check(addr >= 0 && addr < cf->arg_count, "LDA: argument index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < cf->arg_count, "LDA: argument index out of bounds. Offset: 0x%x\n", ip);
         auint *target = cf->get_arg_ptr(*this, addr);
 
         push(Value::from_ptr(target));
@@ -581,7 +529,7 @@ struct VMState {
 
         Frame *cf = get_current_frame();
         Value closure_val = stack[cf->base - cf->arg_count - 1];
-        check(addr >= 0 && addr < closure_val.size(), "LDA: captured index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < closure_val.size(), "LDA: captured index out of bounds. Offset: 0x%x\n", ip);
         auint *target = cf->get_captured_ptr(*this, addr);
         push(Value::from_ptr(target));
     }
@@ -593,7 +541,7 @@ struct VMState {
         int32_t addr;
         get_int_from_code(&addr, code);
 
-        check(addr >= 0 && addr < global_area_size, "ST: global index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < global_area_size, "ST: global index out of bounds. Offset: 0x%x\n", ip);
         stack[addr] = v.repr;
 
         push(v);
@@ -605,7 +553,7 @@ struct VMState {
         get_int_from_code(&addr, code);
 
         Frame *cf = get_current_frame();
-        check(addr >= 0 && addr < cf->local_count, "ST: local index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < cf->local_count, "ST: local index out of bounds. Offset: 0x%x\n", ip);
         cf->set_local(*this, addr, v);
 
         push(v);
@@ -617,7 +565,7 @@ struct VMState {
         get_int_from_code(&addr, code);
 
         Frame *cf = get_current_frame();
-        check(addr >= 0 && addr < cf->arg_count, "ST: argument index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < cf->arg_count, "ST: argument index out of bounds. Offset: 0x%x\n", ip);
         cf->set_arg(*this, addr, v);
 
         push(v);
@@ -630,7 +578,7 @@ struct VMState {
 
         Frame *cf = get_current_frame();
         Value closure_val = stack[cf->base - cf->arg_count - 1];
-        check(addr >= 0 && addr < closure_val.size(), "ST: captured index out of bounds", current_line, ip);
+        check(addr >= 0 && addr < closure_val.size(), "ST: captured index out of bounds. Offset: 0x%x\n", ip);
         cf->set_captured(*this, addr, v);
 
         push(v);
@@ -640,13 +588,13 @@ struct VMState {
         // std::cout << "CJMPz\n";
         int32_t loc;
         get_int_from_code(&loc, code);
-        check(loc <= code_size, "incorrect CJMPz destination", current_line, ip);
+        check(loc <= code_size, "incorrect CJMPz destination. Offset: 0x%x\n", ip);
 
         Value cond = pop();
-        check(cond.is_integer(), "CJMPz argument should be integer", current_line, ip);
+        check(cond.is_integer(), "CJMPz argument should be integer. Offset: 0x%x\n", ip);
         int32_t int_cond = cond.as_integer();
         if (!int_cond) {
-            check(loc <= code_size, "incorrect jump destination", current_line, ip);
+            check(loc <= code_size, "incorrect jump destination. Offset: 0x%x\n", ip);
             ip = loc;
         }
     }
@@ -654,13 +602,13 @@ struct VMState {
         // std::cout << "CJMPnz\n";
         int32_t loc;
         get_int_from_code(&loc, code);
-        check(loc <= code_size, "incorrect CJMPnz destination", current_line, ip);
+        check(loc <= code_size, "incorrect CJMPnz destination. Offset: 0x%x\n", ip);
 
         Value cond = pop();
-        check(cond.is_integer(), "CJMPnz argument should be integer", current_line, ip);
+        check(cond.is_integer(), "CJMPnz argument should be integer. Offset: 0x%x\n", ip);
         int32_t int_cond = cond.as_integer();
         if (int_cond) {
-            check(loc <= code_size, "incorrect jump destination", current_line, ip);
+            check(loc <= code_size, "incorrect jump destination. Offset: 0x%x\n", ip);
             ip = loc;
         }
     }
@@ -669,7 +617,7 @@ struct VMState {
         get_int_from_code(&arg_count, code);
         int32_t local_count;
         get_int_from_code(&local_count, code);
-        check(arg_count >= 0 && local_count >= 0, "BEGIN: incorrect args or locals count", current_line, ip);
+        check(arg_count >= 0 && local_count >= 0, "BEGIN: incorrect args or locals count. Offset: 0x%x\n", ip);
 
         Frame *prev_frame = get_current_frame();
         int32_t base = stack_top; // base should point to local variables
@@ -683,16 +631,14 @@ struct VMState {
         tmp_is_closure = false;
 
         int32_t new_stack_top = stack_top + local_count;
-        if (new_stack_top > stack.size())
-            stack.resize(std::max(static_cast<size_t>(new_stack_top), stack.size() * 2), 0);
-        check(new_stack_top < MAX_STACK_SIZE, "stack overflow", current_line, ip);
+        check(new_stack_top < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
         stack_top = new_stack_top;
 
         // Empty values for new_frame's locals
         for (int i = 0; i < local_count; i++)
             new_frame.set_local(*this, i, 0);
 
-        frames.push(new_frame);
+        push_frame(new_frame);
         __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
     }
     inline void execute_cbegin() {
@@ -700,7 +646,7 @@ struct VMState {
         get_int_from_code(&arg_count, code);
         int32_t local_count;
         get_int_from_code(&local_count, code);
-        check(arg_count >= 0 && local_count >= 0, "CBEGIN: incorrect args or locals count", current_line, ip);
+        check(arg_count >= 0 && local_count >= 0, "CBEGIN: incorrect args or locals count. Offset: 0x%x\n", ip);
 
         Frame *prev_frame = get_current_frame();
         int32_t base = stack_top;
@@ -716,36 +662,33 @@ struct VMState {
         // - arg 0
 
         int32_t new_stack_top = stack_top + local_count;
-        if (new_stack_top > stack.size())
-            stack.resize(std::max(static_cast<size_t>(new_stack_top), stack.size() * 2), 0);
-        check(new_stack_top < MAX_STACK_SIZE, "stack overflow", current_line, ip);
+        check(new_stack_top < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", ip);
         stack_top = new_stack_top;
 
         // Empty values for new_frame's locals
         for (int i = 0; i < local_count; i++)
             new_frame.set_local(*this, i, 0);
 
-        frames.push(new_frame);
+        push_frame(new_frame);
         __gc_stack_bottom = static_cast<size_t *>(&stack[0] + stack_top);
     }
     inline void execute_closure() {
         // std::cout << "CLOSURE\n";
         int32_t target;
         get_int_from_code(&target, code);
-        check(target >= 0 && target <= code_size, "CLOSURE: invalid target address", current_line, ip);
+        check(target >= 0 && target <= code_size, "CLOSURE: invalid target address. Offset: 0x%x\n", ip);
 
         int32_t n;
         get_int_from_code(&n, code);
-        check(n >= 0, "CLOSURE: negative capture count", current_line, ip);
+        check(n >= 0, "CLOSURE: negative capture count. Offset: 0x%x\n", ip);
+        check(n < MAX_ARGS_NUM, "CLOSURE: too many arguments. Offset: 0x%x\n", ip);
 
-        aint* args = (aint*)malloc((n + 1) * sizeof(aint)); // +1 for code_offset
-        check(args, "CLOSURE: memory allocation failed", current_line, ip);
+        aint args[MAX_ARGS_NUM];
         args[0] = static_cast<aint>(target);
-
         for (int i = 0; i < n; i++) {
             int8_t type;
             get_char_from_code(&type, code); // G: 00, L: 01, A: 02, C: 03
-            check(type >= 0 && type <= 3, "CLOSURE: invalid varspec type", current_line, ip);
+            check(type >= 0 && type <= 3, "CLOSURE: invalid varspec type. Offset: 0x%x\n", ip);
 
             int32_t addr;
             get_int_from_code(&addr, code);
@@ -754,37 +697,36 @@ struct VMState {
             Value v;
             switch (type) {
                 case 0: // G(addr)
-                    check(addr >= 0 && addr < global_area_size, "CLOSURE: global index out of bounds", current_line, ip);
+                    check(addr >= 0 && addr < global_area_size, "CLOSURE: global index out of bounds. Offset: 0x%x\n", ip);
                     v = Value::from_repr(get_global(addr));
                     break;
                 case 1: // L(addr)
-                    check(addr >= 0 && addr < cf->local_count, "CLOSURE: local index out of bounds", current_line, ip);
+                    check(addr >= 0 && addr < cf->local_count, "CLOSURE: local index out of bounds. Offset: 0x%x\n", ip);
                     v = Value::from_repr(cf->get_local(*this, addr));
                     break;
                 case 2: // A(addr)
-                    check(addr >= 0 && addr < cf->arg_count, "CLOSURE: argument index out of bounds", current_line, ip);
+                    check(addr >= 0 && addr < cf->arg_count, "CLOSURE: argument index out of bounds. Offset: 0x%x\n", ip);
                     v = Value::from_repr(cf->get_arg(*this, addr));
                     break;
                 case 3: { // C(addr)
                     Value closure_val = stack[cf->base - cf->arg_count - 1];
-                    check(addr >= 0 && addr < closure_val.size(), "LD: captured index out of bounds", current_line, ip);
+                    check(addr >= 0 && addr < closure_val.size(), "LD: captured index out of bounds. Offset: 0x%x\n", ip);
                     v = cf->get_captured(*this, addr);
                     break;
                 }
                 default:
-                    check(false, "invalid varspec for CLOSURE", current_line, ip);
+                    check(false, "invalid varspec for CLOSURE. Offset: 0x%x\n", ip);
             }
             args[i + 1] = static_cast<aint>(v.repr);
         }
         void* closure_obj = Bclosure(args, BOX(n + 1));
-        free(args);
         push(Value::from_ptr(closure_obj));
     }
     inline void execute_callc() {
         // std::cout << "CALLC\n";
         int32_t n;
         get_int_from_code(&n, code);
-        check(n >= 0, "CALLC: negative arguments count", current_line, ip);
+        check(n >= 0, "CALLC: negative arguments number. Offset: 0x%x\n", ip);
 
         Frame *current_frame = get_current_frame();
         current_frame->return_address = ip;
@@ -797,55 +739,55 @@ struct VMState {
         // - closure
 
         Value closure_val = peek(n);
-        check(closure_val.is_closure(), "first argument to CALLC must be closure", current_line, ip);
+        check(closure_val.is_closure(), "first argument to CALLC must be closure. Offset: 0x%x\n", ip);
         data* closure = TO_DATA(closure_val.as_ptr());
         auint* captures = reinterpret_cast<auint*>(closure->contents);
 
         // Do a JMP, basically
         // All captured variables should already be on the stack
         int32_t target = static_cast<int32_t>(captures[0]);
-        check(target <= code_size, "incorrect CALLC destination", current_line, ip);
+        check(target <= code_size, "incorrect CALLC destination. Offset: 0x%x\n", ip);
         ip = target;
         tmp_is_closure = true;
 
         int next_op = code[ip];
         int next_high = (next_op >> 4) & 0xF;
         int next_low = next_op & 0xF;
-        check(next_high == 5 && (next_low == 3 || next_low == 2), "destination instruction after CALLC should be CBEGIN or BEGIN", current_line, ip);
+        check(next_high == 5 && (next_low == 3 || next_low == 2), "destination instruction after CALLC should be CBEGIN or BEGIN. Offset: 0x%x\n", ip);
     }
     inline void execute_call() {
         // std::cout << "CALL\n";
         int32_t target;
         get_int_from_code(&target, code);
-        check(target >= 0 && target < code_size, "CALL: invalid target address", current_line, ip);
+        check(target >= 0 && target < code_size, "CALL: invalid target address. Offset: 0x%x\n", ip);
 
         int32_t n;
         get_int_from_code(&n, code);
-        check(n >= 0, "CALL: negative arguments count", current_line, ip);
+        check(n >= 0, "CALL: negative arguments number. Offset: 0x%x\n", ip);
 
         Frame *current_frame = get_current_frame();
         current_frame->return_address = ip;
 
         // Do a JMP, basically
-        check(target <= code_size, "incorrect call destination", current_line, ip);
+        check(target <= code_size, "incorrect call destination. Offset: 0x%x\n", ip);
         ip = target;
         tmp_is_closure = false;
 
         int next_op = code[ip];
         int next_high = (next_op >> 4) & 0xF;
         int next_low = next_op & 0xF;
-        check(next_high == 5 && next_low == 2, "destination instruction after CALL should be BEGIN", current_line, ip);
+        check(next_high == 5 && next_low == 2, "destination instruction after CALL should be BEGIN. Offset: 0x%x\n", ip);
     }
 
     inline void execute_tag() {
         // std::cout << "TAG\n";
         int32_t tag_index;
         get_int_from_code(&tag_index, code);
-        check(tag_index >= 0 && tag_index < bf->stringtab_size, "TAG: string index out of bounds", current_line, ip);
+        check(tag_index >= 0 && tag_index < bf->stringtab_size, "TAG: string index out of bounds. Offset: 0x%x\n", ip);
 
         int32_t expected_elem_count;
         get_int_from_code(&expected_elem_count, code);
-        check(expected_elem_count >= 0, "TAG: negative element count", current_line, ip);
+        check(expected_elem_count >= 0, "TAG: negative element count. Offset: 0x%x\n", ip);
 
         auint result = 0;
         Value tested_val = pop();
@@ -937,14 +879,14 @@ struct VMState {
     inline void execute_write() {
         // std::cout << "CALL Lwrite\n";
         Value v = pop();
-        check(v.is_integer(), "invalid write argument", current_line, ip);
+        check(v.is_integer(), "invalid write argument. Offset: 0x%x\n", ip);
         Lwrite(v.repr);
         push(Value::from_repr(0));
     }
     inline void execute_length() {
         // std::cout << "CALL Llength\n";
         Value v = pop();
-        check(v.is_aggregate(), "non-aggregate argument to length builtin", current_line, ip);
+        check(v.is_aggregate(), "non-aggregate argument to length builtin. Offset: 0x%x\n", ip);
         auto len = Llength(v.as_ptr());
         push(Value::from_repr(len));
     }
@@ -960,15 +902,15 @@ struct VMState {
         // std::cout << "CALL Barray\n";
         int32_t n;
         get_int_from_code(&n, code);
-        aint* args = (aint*)malloc(n * sizeof(aint));
-        check(args, "BARRAY: memory allocation failed", current_line, ip);
+        check(n >= 0, "BARRAY: negative arguments number. Offset: 0x%x\n", ip);
+        check(n < MAX_ARGS_NUM, "BARRAY: too many arguments. Offset: 0x%x\n", ip);
+
+        aint args[MAX_ARGS_NUM];
         for (int i = 0; i < n; i++) {
             Value elem = pop();
             args[n - i - 1] = static_cast<aint>(elem.repr);
         }
-
         void* v = Barray(args, BOX(n));
-        free(args);
         push(Value::from_ptr(v));
     }
 };
@@ -981,9 +923,9 @@ void interpret(bytefile *bf, char *fname) {
     vm.global_area_size = bf->global_area_size;
     vm.tmp_is_closure = false;
     vm.fname = fname;
+    vm.frames_top = 0;
 
-    check(bf->global_area_size + 2 < MAX_STACK_SIZE, "initial stack size exceeds maximum", 0, 0);
-    vm.stack.resize(bf->global_area_size + 2, 0); // globals + 2 main arguments
+    check(bf->global_area_size + 2 < MAX_STACK_SIZE, "initial stack size exceeds maximum. Offset: 0x%x\n", 0);
     vm.stack_top = bf->global_area_size + 2;
     // We use virtual stack here
     __gc_stack_top = static_cast<size_t *>(&vm.stack[0]);
@@ -1067,29 +1009,18 @@ void interpret(bytefile *bf, char *fname) {
                 if (high == Bytecode::BINOP_HIGH)
                     vm.execute_binop(op);
                 else
-                    check(false, "unknown bytecode: ", vm.current_line, vm.ip);
+                    check(false, "unknown bytecode: ", vm.ip);
             }
         }
     }
 }
 
-void free_bytefile(bytefile* file) {
-    if (file)
-        free(file);
-}
-
 int main(int argc, char* argv[])
 {
     __init();
-    try {
-        bytefile* f = read_file(argv[1]);
-        interpret(f, argv[1]);
-        free_bytefile(f);
-        __shutdown();
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "Fatal error: " << e.what() << std::endl;
-        __shutdown();
-        return 1;
-    }
+    bytefile f;
+    read_file(argv[1], &f);
+    interpret(&f, argv[1]);
+    __shutdown();
+    return 0;
 }

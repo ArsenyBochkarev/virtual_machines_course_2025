@@ -66,7 +66,7 @@ LAMA_RUNTIME=$(PWD)/Lama/runtime
 performance: $(PERF_TESTS)
 
 build-lama-runtime:
-	@cp $(PWD)/lama_runtime_makefile $(LAMA_RUNTIME)/Makefile && cp $(PWD)/runtime/runtime.c $(LAMA_RUNTIME)/runtime.c && cd $(LAMA_RUNTIME) && make all
+	@cp $(PWD)/lama_runtime_makefile $(LAMA_RUNTIME)/Makefile && cd $(LAMA_RUNTIME) && make all
 
 $(PERF_TESTS): %: %.lama
 	@echo "Recursive source-level interpreter:" $@
@@ -77,12 +77,12 @@ $(PERF_TESTS): %: %.lama
 	@LAMA=$(LAMA_RUNTIME) && cd $(PERF_DIR) && $(LAMAC) -b $< && time -f "$@\t%U" $(LAMAI) $@.bc && rm $@.bc
 
 lamai: build-lama-runtime lamai.o
-	@g++ -m32 -std=c++17 -O2 -Wno-narrowing \
+	@g++ -m32 -std=c++17 -O2 -Wno-narrowing -Wno-write-strings \
 	    -Wl,--as-needed -Wl,--no-undefined -Wl,--defsym=__start_custom_data=0 -Wl,--defsym=__stop_custom_data=0 \
 		lamai.o $(LAMA_RUNTIME)/runtime.a -o $(LAMAI)
 
 lamai.o:
-	g++ -m32 -std=c++17 -O2 -Wno-narrowing -c $(LAMAI_SRC)
+	g++ -m32 -std=c++17 -O2 -Wno-narrowing -Wno-write-strings -c $(LAMAI_SRC)
 
 clean-regression:
 	@rm -f *.bc *.actual.log *.diff
