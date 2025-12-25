@@ -37,29 +37,24 @@ bytefile* read_file(char *fname, bytefile *file) {
     FILE *f = fopen (fname, "rb");
     long size;
 
-    if (!f) {
-        fprintf(stderr, "%s\n", strerror (errno));
-        exit(1);
-    }
+    if (!f)
+        failure("%s\n", strerror(errno));
 
     if (fseek (f, 0, SEEK_END) == -1) {
-        fprintf(stderr, "%s\n", strerror (errno));
         fclose(f);
-        exit(1);
+        failure("%s\n", strerror(errno));
     }
 
     size = ftell (f);
     if (size == -1) {
-        fprintf(stderr, "%s\n", strerror(errno));
         fclose(f);
-        exit(1);
+        failure("%s\n", strerror(errno));
     }
 
     rewind (f);
     if (size != fread (&file->stringtab_size, 1, size, f)) {
-        fprintf(stderr, "%s\n", strerror (errno));
         fclose(f);
-        exit(1);
+        failure("%s\n", strerror(errno));
     }
     fclose (f);
 
