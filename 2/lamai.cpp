@@ -737,7 +737,7 @@ struct VMState {
         // Do a JMP, basically
         // All captured variables should already be on the stack
         int32_t target = static_cast<int32_t>(captures[0]);
-        check(target <= code_size, "incorrect CALLC destination. Offset: 0x%x\n", ip);
+        check(target >= 0 && target < code_size, "CALLC: invalid target address. Offset: 0x%x\n", ip);
         ip = target;
         tmp_is_closure = true;
 
@@ -760,7 +760,6 @@ struct VMState {
         current_frame->return_address = ip;
 
         // Do a JMP, basically
-        check(target <= code_size, "incorrect call destination. Offset: 0x%x\n", ip);
         ip = target;
         tmp_is_closure = false;
 
