@@ -25,9 +25,9 @@ make regression
 Results for Sort.lama test:
 | Interpreter | Time |
 | ------------------ | ------- |
-| Recursive source-level interpreter | 6.33 |
-| Recursive bytecode interpreter     | 2.45 |
-| Iterative bytecode interpreter     | 4.17 |
+| Recursive source-level interpreter | 5.82 |
+| Recursive bytecode interpreter     | 2.18 |
+| Iterative bytecode interpreter     | 4.07 |
 
 Run performance tests yourself:
 ```bash
