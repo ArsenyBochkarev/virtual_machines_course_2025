@@ -19,75 +19,6 @@
 extern size_t* __gc_stack_top;
 extern size_t* __gc_stack_bottom;
 
-/* The unpacked representation of bytecode file */
-typedef struct {
-    char *string_ptr;              /* A pointer to the beginning of the string table */
-    int  *public_ptr;              /* A pointer to the beginning of publics table    */
-    char *code_ptr;                /* A pointer to the bytecode itself               */
-    int   stringtab_size;          /* The size (in bytes) of the string table        */
-    int   global_area_size;        /* The size (in words) of global area             */
-    int   public_symbols_number;   /* The number of public symbols                   */
-    char  buffer[0];               
-} bytefile;
-
-/* Gets a string from a string table by an index */
-char* get_string(bytefile *f, int pos) {
-    return &f->string_ptr[pos];
-}
-
-static int code_size = -1;
-
-/* Reads a binary bytecode file by name and unpacks it */
-bytefile* read_file(char *fname) {
-    FILE *f = fopen (fname, "rb");
-    long size;
-    bytefile *file;
-
-    if (!f) {
-        fprintf(stderr, "%s\n", strerror (errno));
-        exit(1);
-    }
-
-    if (fseek (f, 0, SEEK_END) == -1) {
-        fprintf(stderr, "%s\n", strerror (errno));
-        fclose(f);
-        exit(1);
-    }
-
-    size = ftell (f);
-    if (size == -1) {
-        fprintf(stderr, "%s\n", strerror(errno));
-        fclose(f);
-        exit(1);
-    }
-
-    file = (bytefile*) malloc (sizeof(int)*4 + size);
-    if (!file) {
-        fprintf(stderr, "*** FAILURE: unable to allocate memory.\n");
-        fclose(f);
-        exit(1);
-    }
-
-    rewind (f);
-    if (size != fread (&file->stringtab_size, 1, size, f)) {
-        fprintf(stderr, "%s\n", strerror (errno));
-        free(file);
-        fclose(f);
-        exit(1);
-    }
-    fclose (f);
-
-    file->string_ptr = &file->buffer [file->public_symbols_number * 2 * sizeof(int)];
-    file->public_ptr = (int*) file->buffer;
-    file->code_ptr = &file->string_ptr [file->stringtab_size];
-
-    // TODO: Think if this is really needed
-    // CUSTOM CODE BELOW:
-    code_size = size - file->public_symbols_number * 2 * sizeof(int) + file->stringtab_size;
-
-    return file;
-}
-
 class RuntimeError : public std::exception {
 private:
     std::string message;
@@ -117,6 +48,76 @@ private:
 static inline void check(bool condition, const char *msg, int32_t line_number, int32_t offset) {
     if (!condition)
         throw RuntimeError(msg, line_number, offset);
+}
+
+/* The unpacked representation of bytecode file */
+typedef struct {
+    char *string_ptr;                  /* A pointer to the beginning of the string table */
+    int32_t  *public_ptr;              /* A pointer to the beginning of publics table    */
+    char *code_ptr;                    /* A pointer to the bytecode itself               */
+    int32_t   stringtab_size;          /* The size (in bytes) of the string table        */
+    int32_t   global_area_size;        /* The size (in words) of global area             */
+    int32_t   public_symbols_number;   /* The number of public symbols                   */
+    char  buffer[0];               
+} bytefile;
+
+/* Gets a string from a string table by an index */
+char* get_string(bytefile *f, int pos) {
+    return &f->string_ptr[pos];
+}
+
+static int32_t code_size = -1;
+
+/* Reads a binary bytecode file by name and unpacks it */
+bytefile* read_file(char *fname) {
+    FILE *f = fopen (fname, "rb");
+    long size;
+    bytefile *file;
+
+    if (!f) {
+        fprintf(stderr, "%s\n", strerror (errno));
+        exit(1);
+    }
+
+    if (fseek (f, 0, SEEK_END) == -1) {
+        fprintf(stderr, "%s\n", strerror (errno));
+        fclose(f);
+        exit(1);
+    }
+
+    size = ftell (f);
+    if (size == -1) {
+        fprintf(stderr, "%s\n", strerror(errno));
+        fclose(f);
+        exit(1);
+    }
+
+    file = (bytefile*) malloc (sizeof(int32_t)*4 + size);
+    if (!file) {
+        fprintf(stderr, "*** FAILURE: unable to allocate memory.\n");
+        fclose(f);
+        exit(1);
+    }
+
+    rewind (f);
+    if (size != fread (&file->stringtab_size, 1, size, f)) {
+        fprintf(stderr, "%s\n", strerror (errno));
+        free(file);
+        fclose(f);
+        exit(1);
+    }
+    fclose (f);
+
+    check(file->public_symbols_number > 0, "corrupted public_symbols_number in file", 0, 0);
+    file->string_ptr = &file->buffer [file->public_symbols_number * 2 * sizeof(int32_t)];
+    file->public_ptr = (int32_t*) file->buffer;
+    file->code_ptr = &file->string_ptr [file->stringtab_size];
+
+    // TODO: Think if this is really needed
+    // CUSTOM CODE BELOW:
+    code_size = size - file->public_symbols_number * 2 * sizeof(int32_t) + file->stringtab_size;
+
+    return file;
 }
 
 struct Value;
@@ -1086,7 +1087,6 @@ void free_bytefile(bytefile* file) {
 int main(int argc, char* argv[])
 {
     __init();
-    // TODO: checks for stackoverflow
     try {
         bytefile* f = read_file(argv[1]);
         interpret(f, argv[1]);
