@@ -142,15 +142,9 @@ struct Value {
     Value(const Value &x) = default;
     Value& operator=(const Value& other) = default;
     static Value from_int(aint v) {
-        // Lowest bit for integers = 1
-        auto masked = static_cast<auint>(v) & (uc >> 1);
-        auto shifted = masked << 1;
-        if (v < 0)
-            shifted |= static_cast<auint>(1) << (sizeof(auint) * 8 - 1);
-        return Value{shifted | 1};
+        return BOX(v);
     }
     static Value from_ptr(void* p) {
-        // Lowest bit for ptrs = 0
         return Value{reinterpret_cast<auint>(p)};
     }
     static Value from_repr(auint repr) {
@@ -168,8 +162,8 @@ struct Value {
         return get_type_header_ptr(get_obj_header_ptr(as_ptr()));
     }
 
-    bool is_integer() const { return (repr & 1) != 0; }
-    bool is_boxed() const { return (repr & 1) == 0; } // AKA is_reference()
+    bool is_integer() const { return UNBOXED(repr); }
+    bool is_boxed() const { return !UNBOXED(repr); } // AKA is_reference()
     bool is_string() const { return is_boxed() && get_type() == STRING; }
     bool is_array() const { return is_boxed() && get_type() == ARRAY; }
     bool is_sexpr() const { return is_boxed() && get_type() == SEXP; }
