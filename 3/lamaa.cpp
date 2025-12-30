@@ -195,6 +195,7 @@ public:
             if (reachable[addr])
                 continue;
             reachable[addr] = true;
+            jump_targets[addr] = true; // public_symbol is also a jump target
             workset.push_back(addr);
         }
 
