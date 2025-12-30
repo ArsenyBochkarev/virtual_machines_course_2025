@@ -244,8 +244,9 @@ public:
         while (addr < code_size) {
             uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
             if (!reachable[addr]) {
-                size_t len = get_instr_length(opcode, addr, bf->code_ptr, code_size);
-                addr += len;
+                // Code here may be ill-formed, but it's OK since interpreter won't execute it anyway
+                // Skip this code byte-by-byte
+                addr += 1;
                 continue;
             }
 
