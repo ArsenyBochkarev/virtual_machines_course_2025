@@ -105,7 +105,8 @@ bytefile* read_file(char *fname) {
     return file;
 }
 
-int32_t read_int32(const char* data, size_t pos) {
+int32_t read_int32(const char* data, size_t pos, size_t buffer_size) {
+    check(pos + sizeof(int32_t) <= buffer_size, "reading int32 value beyond buffer bounds", pos);
     int32_t value;
     std::memcpy(&value, data + pos, sizeof(int32_t));
     return value;
@@ -122,7 +123,7 @@ private:
         return opcode == JMP || opcode == CALL || opcode == CALLC || opcode == RET || opcode == END || opcode == FAIL;
     }
 
-    size_t get_instr_length(uint8_t opcode, size_t pos, const char *code) {
+    size_t get_instr_length(uint8_t opcode, size_t pos, const char *code, size_t sz) {
         switch (opcode)
         {
         // Instrs with one 4-byte param
@@ -160,7 +161,7 @@ private:
 
         case CLOSURE: {
             // CLOSURE is variable-length instr
-            int32_t n = read_int32(code, pos + 5);
+            int32_t n = read_int32(code, pos + 5, sz);
             check(n >= 0, "CLOSURE: invalid n", pos);
             size_t length = 9 + 5 * n; // 1 (opcode) + 4 (addr) + 4 (n) + 5 * n, where 5 is a value of varspec
             return length;
@@ -196,12 +197,12 @@ public:
             queue.pop();
 
             uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
-            size_t len = get_instr_length(opcode, addr, bf->code_ptr);
+            size_t len = get_instr_length(opcode, addr, bf->code_ptr, code_size);
             check(addr + len <= code_size, "len overflows code_size", addr);
 
             // Add a target to CFG, if it's jump/call
             if (is_jump(opcode) || is_call(opcode)) {
-                int32_t target = read_int32(bf->code_ptr, addr + 1);
+                int32_t target = read_int32(bf->code_ptr, addr + 1, code_size);
                 check(target < code_size, "JMP/CJMPZ/CJMPNZ/CALL/CALLC: target overflows code_size", addr);
                 jump_targets[target] = true;
                 if (!reachable[target]) {
@@ -229,13 +230,13 @@ public:
         while (addr < code_size) {
             uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
             if (!reachable[addr]) {
-                size_t len = get_instr_length(opcode, addr, bf->code_ptr);
+                size_t len = get_instr_length(opcode, addr, bf->code_ptr, code_size);
                 check(addr + len <= code_size, "len overflows code_size", addr);
                 addr += len;
                 continue;
             }
 
-            size_t len1 = get_instr_length(opcode, addr, bf->code_ptr);
+            size_t len1 = get_instr_length(opcode, addr, bf->code_ptr, code_size);
             check(addr + len1 <= code_size, "len overflows code_size", addr);
 
             // 1-instr idiom always counts
@@ -246,7 +247,7 @@ public:
                 size_t next_addr = addr + len1;
                 uint8_t next_opcode = static_cast<uint8_t>(bf->code_ptr[next_addr]);
                 if (next_addr < code_size && reachable[next_addr] && !jump_targets[next_addr]) {
-                    size_t len2 = get_instr_length(next_opcode, next_addr, bf->code_ptr);
+                    size_t len2 = get_instr_length(next_opcode, next_addr, bf->code_ptr, code_size);
                     check(next_addr + len2 <= code_size, "len overflows code_size", addr);
                     std::string instr2(bf->code_ptr + addr, len1 + len2);
                     idioms[instr2]++;
@@ -261,6 +262,7 @@ public:
         if (start >= end)
             return "";
 
+        auto sz = end;
         uint8_t opcode = static_cast<uint8_t>(code[start]);
         std::string result = get_opcode_name(opcode);
         switch (opcode) {
@@ -286,7 +288,7 @@ public:
             case LINE:
             case CALL_BARRAY:
                 if (end - start >= 5) {
-                    int32_t param = read_int32(code, start + 1);
+                    int32_t param = read_int32(code, start + 1, sz);
                     result += " " + std::to_string(param);
                 }
                 break;
@@ -298,22 +300,22 @@ public:
             case TAG:
             case FAIL:
                 if (end - start >= 9) {
-                    int32_t param1 = read_int32(code, start + 1);
-                    int32_t param2 = read_int32(code, start + 5);
+                    int32_t param1 = read_int32(code, start + 1, sz);
+                    int32_t param2 = read_int32(code, start + 5, sz);
                     result += " " + std::to_string(param1) + " " + std::to_string(param2);
                 }
                 break;
 
             case CLOSURE:
                 if (end - start >= 9) {
-                    int32_t target = read_int32(code, start + 1);
-                    int32_t n = read_int32(code, start + 5);
+                    int32_t target = read_int32(code, start + 1, sz);
+                    int32_t n = read_int32(code, start + 5, sz);
                     result += " " + std::to_string(target) + " " + std::to_string(n);
 
                     size_t pos = start + 9;
                     for (int i = 0; i < n && pos + 5 <= end; i++) {
                         uint8_t type = code[pos];
-                        int32_t addr = read_int32(code, pos + 1);
+                        int32_t addr = read_int32(code, pos + 1, sz);
 
                         std::string type_str;
                         switch (type) {
@@ -348,7 +350,7 @@ public:
             size_t idiom_size = entry.first.size();
             while (pos < idiom_size) {
                 uint8_t opcode = static_cast<uint8_t>(code[pos]);
-                size_t len = get_instr_length(opcode, pos, code);
+                size_t len = get_instr_length(opcode, pos, code, idiom_size);
                 check(pos + len <= idiom_size, "ill-formed idiom", pos);
                 std::string instr_str = format_instruction(code, pos, pos + len);
                 if (!text.empty())
