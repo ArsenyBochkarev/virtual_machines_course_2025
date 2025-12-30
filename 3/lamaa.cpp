@@ -1,5 +1,7 @@
+#include <cassert>
 #include <iostream>
 #include <fstream>
+#include <functional>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
@@ -62,6 +64,7 @@ bytefile* read_file(char *fname) {
 
     if (!f) {
         fprintf(stderr, "%s\n", strerror (errno));
+        perror(fname);
         exit(1);
     }
 
@@ -117,7 +120,9 @@ private:
     bytefile* bf;
     std::vector<bool> reachable;
     std::vector<bool> jump_targets;
-    std::unordered_map<std::string, uint32_t> idioms;
+
+    std::unordered_map<size_t, uint32_t> idioms; // idiom hash -> freq
+    std::unordered_map<size_t, std::pair<uint32_t, uint32_t>> idioms_info; // idiom hash -> (idiom len, idiom position in bf->code_ptr)
 
     bool should_split_after(uint8_t opcode) {
         return opcode == JMP || opcode == CALL || opcode == CALLC || opcode == RET || opcode == END || opcode == FAIL;
@@ -222,16 +227,22 @@ public:
         }
     }
 
+    void remember_idiom(size_t addr, const std::string &str, size_t sz, const std::hash<std::string> &hasher) {
+        auto instr1_hash = hasher(str);
+        idioms[instr1_hash]++;
+        idioms_info[instr1_hash] = std::make_pair(sz, addr);
+    }
+
     void find_idioms() {
         if (!bf)
             return;
 
+        std::hash<std::string> hasher;
         size_t addr = 0;
         while (addr < code_size) {
             uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
             if (!reachable[addr]) {
                 size_t len = get_instr_length(opcode, addr, bf->code_ptr, code_size);
-                check(addr + len <= code_size, "len overflows code_size", addr);
                 addr += len;
                 continue;
             }
@@ -241,7 +252,7 @@ public:
 
             // 1-instr idiom always counts
             std::string instr1(bf->code_ptr + addr, len1);
-            idioms[instr1]++;
+            remember_idiom(addr, instr1, len1, hasher);
 
             if (!should_split_after(opcode)) {
                 size_t next_addr = addr + len1;
@@ -250,7 +261,7 @@ public:
                     size_t len2 = get_instr_length(next_opcode, next_addr, bf->code_ptr, code_size);
                     check(next_addr + len2 <= code_size, "len overflows code_size", addr);
                     std::string instr2(bf->code_ptr + addr, len1 + len2);
-                    idioms[instr2]++;
+                    remember_idiom(addr, instr2, len1 + len2, hasher);
                 }
             }
 
@@ -338,41 +349,33 @@ public:
     }
 
     void print_results() {
-        // Bytes to text
-        std::vector<std::pair<std::string, uint32_t>> text_idioms;
-        for (const auto& entry : idioms) {
-            if (!entry.second)
-                continue;
+        check(idioms.size() == idioms_info.size(), "idioms and idioms_info sizes should be same", 0);
 
+        std::vector<std::pair<size_t, uint32_t>> sorted_idioms(idioms.begin(), idioms.end());
+        std::sort(sorted_idioms.begin(), sorted_idioms.end(), [](const auto& a, const auto& b) {
+            return a.second > b.second; 
+        });
+
+        // Bytes to text
+        for (const auto& [idiom_key, idiom_freq] : sorted_idioms) {
             std::string text;
-            size_t pos = 0;
-            const char* code = entry.first.c_str();
-            size_t idiom_size = entry.first.size();
-            while (pos < idiom_size) {
-                uint8_t opcode = static_cast<uint8_t>(code[pos]);
-                size_t len = get_instr_length(opcode, pos, code, idiom_size);
-                check(pos + len <= idiom_size, "ill-formed idiom", pos);
-                std::string instr_str = format_instruction(code, pos, pos + len);
+            size_t pos_in_idiom = 0;
+            size_t idiom_size = idioms_info[idiom_key].first;
+            size_t idiom_offset = idioms_info[idiom_key].second;
+
+            while (pos_in_idiom < idiom_size) {
+                uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[idiom_offset + pos_in_idiom]);
+                size_t len = get_instr_length(opcode, idiom_offset + pos_in_idiom, bf->code_ptr, idiom_size);
+                check(pos_in_idiom + len <= idiom_size, "ill-formed idiom", idiom_offset);
+                std::string instr_str = format_instruction(bf->code_ptr, idiom_offset + pos_in_idiom, idiom_offset + pos_in_idiom + len);
                 if (!text.empty())
                     text += "; ";
                 text += instr_str;
-                pos += len;
+                pos_in_idiom += len;
             }
 
-            text_idioms.push_back({text, entry.second});
+            std::cout << idiom_freq << " " << text << std::endl;
         }
-
-        std::sort(text_idioms.begin(), text_idioms.end(),
-            [](const auto& a, const auto& b) {
-                if (a.second != b.second)
-                    return a.second > b.second;
-
-                // If equal freq, sort lexicographically
-                return a.first < b.first;
-            });
-
-        for (const auto& idiom : text_idioms)
-            std::cout << idiom.second << " " << idiom.first << std::endl;
     }
 
     void run() {
