@@ -9,7 +9,7 @@
 #include <cstring>
 #include <sstream>
 #include <string>
-#include <queue>
+#include <set>
 
 #include "lamaa.hpp"
 
@@ -187,19 +187,20 @@ public:
         reachable.resize(code_size, false);
         jump_targets.resize(code_size, false);
 
-        std::queue<size_t> queue;
+        std::vector<size_t> workset;
         // Starting from public symbols
         for (int i = 0; i < bf->public_symbols_number; i++) {
             size_t addr = bf->public_ptr[i * 2 + 1]; // index for code_ptr (like vm.ip in lamai)
             check(addr < code_size, "addr from public_symbols overflows code_size", addr);
+            if (reachable[addr])
+                continue;
             reachable[addr] = true;
-            queue.push(addr);
+            workset.push_back(addr);
         }
 
         // BFS
-        while (!queue.empty()) {
-            size_t addr = queue.front();
-            queue.pop();
+        for (size_t idx = 0; idx < workset.size(); ++idx) {
+            size_t addr = workset[idx];
 
             uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
             size_t len = get_instr_length(opcode, addr, bf->code_ptr, code_size);
@@ -212,7 +213,7 @@ public:
                 jump_targets[target] = true;
                 if (!reachable[target]) {
                     reachable[target] = true;
-                    queue.push(target);
+                    workset.push_back(target);
                 }
             }
 
@@ -221,7 +222,7 @@ public:
                 size_t next_addr = addr + len;
                 if (next_addr < code_size && !reachable[next_addr]) {
                     reachable[next_addr] = true;
-                    queue.push(next_addr);
+                    workset.push_back(next_addr);
                 }
             }
         }
