@@ -66,13 +66,14 @@ bytefile* read_file(char *fname) {
     }
 
     if (fseek (f, 0, SEEK_END) == -1) {
-        fprintf(stderr, "%s\n", strerror (errno));
+        perror("fseek");
         fclose(f);
         exit(1);
     }
 
     size = ftell (f);
     if (size == -1) {
+        perror("ftell");
         fprintf(stderr, "%s\n", strerror(errno));
         fclose(f);
         exit(1);
@@ -80,14 +81,14 @@ bytefile* read_file(char *fname) {
 
     file = (bytefile*) malloc (sizeof(int32_t)*4 + size);
     if (!file) {
-        fprintf(stderr, "*** FAILURE: unable to allocate memory.\n");
+        perror("unable to allocate memory");
         fclose(f);
         exit(1);
     }
 
     rewind (f);
     if (size != fread (&file->stringtab_size, 1, size, f)) {
-        fprintf(stderr, "%s\n", strerror (errno));
+        perror("fread");
         free(file);
         fclose(f);
         exit(1);
