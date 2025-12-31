@@ -150,9 +150,9 @@ public:
             workset.push_back(addr);
         }
 
-        // BFS
-        for (size_t idx = 0; idx < workset.size(); ++idx) {
-            size_t addr = workset[idx];
+        while(!workset.empty()) {
+            size_t addr = workset.back();
+            workset.pop_back();
 
             uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
             size_t len = alt_instr_length(addr, bf->code_ptr, code_size);
