@@ -182,7 +182,7 @@ public:
             // Add next instruction to CFG, if we haven't been there yet
             if (!instr_is_terminal(instr_info)) {
                 size_t next_addr = addr + len;
-                if (next_addr < code_size && !reachable[next_addr]) {
+                if (!reachable[next_addr]) {
                     reachable[next_addr] = true;
                     workset.push_back(next_addr);
                 }
@@ -227,7 +227,7 @@ public:
             if (!instr_is_terminal(instr_info) && !instr_is_call(instr_info)) { // non-terminal && non-call -> we shouldn't split idiom
                 size_t next_addr = addr + len1;
                 uint8_t next_opcode = static_cast<uint8_t>(bf->code_ptr[next_addr]);
-                if (next_addr < code_size && reachable[next_addr] && !jump_targets[next_addr]) {
+                if (reachable[next_addr] && !jump_targets[next_addr]) {
                     auto instr_info2 = instruction_info(bf->code_ptr, next_addr, code_size);
                     size_t len2 = std::get<1>(instr_info2);
                     check(next_addr + len2 <= code_size, "len overflows code_size", addr);
