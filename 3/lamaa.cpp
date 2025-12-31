@@ -122,16 +122,45 @@ private:
     bytefile* bf;
     std::vector<bool> reachable;
     std::vector<bool> jump_targets;
-    using idiom_tuple = std::tuple<size_t, uint32_t, uint32_t, uint32_t>; // (hash, freq, len, pos)
-    std::vector<idiom_tuple> idioms_vec;
-    std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> idioms;
 
-    size_t instr_length(size_t start) {
+    size_t instr_length(size_t start) const {
         return disassemble_instruction(bf, start, stdin);
     }
 
 public:
-    IdiomAnalyzer(bytefile* bytefile) : bf(bytefile) {}
+    struct idiom_data {
+        inline static bytefile* bf;
+
+        uint32_t offset;
+        bool is_two_instr; // false -- 1-instr idiom, true -- 2-instr idiom
+
+        uint32_t get_idiom_len() const {
+            uint32_t length = disassemble_instruction(bf, offset, stdin);
+            if (is_two_instr)
+                length += disassemble_instruction(bf, offset + length, stdin);
+            return length;
+        }
+
+        bool operator<(const idiom_data& other) const {
+            uint32_t length = get_idiom_len();
+            uint32_t other_length = other.get_idiom_len();
+            if (length != other_length)
+                return length < other_length;
+            return std::memcmp(bf->code_ptr + offset, bf->code_ptr + other.offset, length) < 0;
+        }
+        bool operator==(const idiom_data& other) const {
+            uint32_t length = get_idiom_len();
+            if (length != other.get_idiom_len())
+                return false;
+            return std::memcmp(bf->code_ptr + offset, bf->code_ptr + other.offset, length) == 0;
+        }
+    };
+    std::vector<idiom_data> idioms_vec;
+    std::vector<std::pair<uint32_t, idiom_data>> idioms;
+
+    IdiomAnalyzer(bytefile* bytefile) : bf(bytefile) {
+        idiom_data::bf = bf;
+    }
 
     void analyze_reachability() {
         if (!bf)
@@ -182,9 +211,8 @@ public:
         }
     }
 
-    void remember_idiom(size_t addr, const std::string &str, size_t sz, const std::hash<std::string> &hasher) {
-        auto instr_hash = hasher(str);
-        idioms_vec.push_back({instr_hash, 1, sz, addr});
+    void remember_idiom(size_t addr, bool is_two_instr) {
+        idioms_vec.push_back({addr, is_two_instr});
     }
 
     void find_idioms() {
@@ -206,8 +234,7 @@ public:
             check(addr + len1 <= code_size, "len overflows code_size", addr);
 
             // 1-instr idiom always counts
-            std::string instr1(bf->code_ptr + addr, len1);
-            remember_idiom(addr, instr1, len1, hasher);
+            remember_idiom(addr, /*is_two_instr=*/false);
 
             if (!is_terminal(opcode) && !is_call(opcode)) { // non-terminal && non-call -> we shouldn't split idiom
                 size_t next_addr = addr + len1;
@@ -215,47 +242,43 @@ public:
                 if (reachable[next_addr] && !jump_targets[next_addr]) {
                     size_t len2 = instr_length(next_addr);
                     check(next_addr + len2 <= code_size, "len overflows code_size", addr);
-                    std::string instr2(bf->code_ptr + addr, len1 + len2);
-                    remember_idiom(addr, instr2, len1 + len2, hasher);
+                    remember_idiom(addr, /*is_two_instr=*/true);
                 }
             }
-
             addr += len1;
         }
-        std::sort(idioms_vec.begin(), idioms_vec.end(),
-            [](const idiom_tuple& a, const idiom_tuple& b) {
-                return std::get<0>(a) < std::get<0>(b);
-            });
-        size_t current_hash = std::get<0>(idioms_vec[0]);
-        size_t current_freq = 1;
-        size_t current_len = std::get<2>(idioms_vec[0]);
-        size_t current_offset = std::get<3>(idioms_vec[0]);
-        for (const auto& [hash, freq1, len, offset] : idioms_vec) {
-            if (current_hash != hash) {
-                idioms.push_back({current_freq, current_len, current_offset});
+        if (idioms_vec.empty())
+            return;
 
-                current_hash = hash;
+        std::sort(idioms_vec.begin(), idioms_vec.end());
+        auto current_idiom = idioms_vec[0];
+        size_t current_freq = 1;
+        for (int i = 0; i < idioms_vec.size(); i++) {
+            if (current_idiom == idioms_vec[i]) current_freq++;
+            else {
+                idioms.push_back({current_freq, idioms_vec[i]});
+                current_idiom = idioms_vec[i];
                 current_freq = 1;
-                current_len = len;
-                current_offset = offset;
-            } else current_freq++;
+            }
         }
     }
 
     void print_results() {
         // Sort by freq
         std::sort(idioms.begin(), idioms.end(), [](const auto& a, const auto& b) {
-            return std::get<0>(a) > std::get<0>(b);
+            return a.first > b.first;
         });
+
         // Bytes to text
-        for (const auto& [idiom_freq, idiom_size, idiom_offset] : idioms) {
+        for (const auto& [idiom_freq, idiom] : idioms) {
             std::string text;
             size_t pos_in_idiom = 0;
             std::cout << idiom_freq << " ";
+            auto idiom_size = idiom.get_idiom_len();
             while (pos_in_idiom < idiom_size) {
-                auto pos = idiom_offset + pos_in_idiom;
+                auto pos = idiom.offset + pos_in_idiom;
                 size_t len = instr_length(pos);
-                check(pos_in_idiom + len <= idiom_size, "ill-formed idiom", idiom_offset);
+                check(pos_in_idiom + len <= idiom_size, "ill-formed idiom", idiom.offset);
                 disassemble_instruction(bf, pos, stdout);
                 std::cout << "; ";
                 pos_in_idiom += len;
