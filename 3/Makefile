@@ -1,6 +1,7 @@
 LAMAC=lamac
 LAMAA=$(PWD)/lamaa
 LAMAA_SRC=$(PWD)/lamaa.cpp
+BYTERUN=$(PWD)/byterun/byterun.c
 TEST_DIR=$(PWD)/test
 LAMA_FILES := $(wildcard $(TEST_DIR)/*.lama)
 
@@ -23,4 +24,4 @@ test:
 	done;
 
 lamaa:
-	g++ -m32 -std=c++17 -O2 $(LAMAA_SRC) -o $(LAMAA)
+	g++ -m32 -std=c++17 -Wno-write-strings -O2 $(LAMAA_SRC) $(BYTERUN) -o $(LAMAA)
