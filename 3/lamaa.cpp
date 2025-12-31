@@ -122,7 +122,9 @@ private:
     bytefile* bf;
     std::vector<bool> reachable;
     std::vector<bool> jump_targets;
-    std::vector<std::tuple<size_t, uint32_t, uint32_t, uint32_t>> idioms_vec; // (hash, freq, len, pos)
+    using idiom_tuple = std::tuple<size_t, uint32_t, uint32_t, uint32_t>; // (hash, freq, len, pos)
+    std::vector<idiom_tuple> idioms_vec;
+    std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> idioms;
 
     size_t instr_length(size_t start) {
         return disassemble_instruction(bf, start, stdin);
@@ -182,13 +184,7 @@ public:
 
     void remember_idiom(size_t addr, const std::string &str, size_t sz, const std::hash<std::string> &hasher) {
         auto instr_hash = hasher(str);
-        auto it = std::find_if(idioms_vec.begin(), idioms_vec.end(), [instr_hash](const auto& t) {
-            return std::get<0>(t) == instr_hash;
-        });
-        if (it != idioms_vec.end()) // Idiom is in idioms_vec
-            std::get<1>(*it) += 1;
-        else
-            idioms_vec.push_back({instr_hash, 1, sz, addr});
+        idioms_vec.push_back({instr_hash, 1, sz, addr});
     }
 
     void find_idioms() {
@@ -226,15 +222,33 @@ public:
 
             addr += len1;
         }
+        std::sort(idioms_vec.begin(), idioms_vec.end(),
+            [](const idiom_tuple& a, const idiom_tuple& b) {
+                return std::get<0>(a) < std::get<0>(b);
+            });
+        size_t current_hash = std::get<0>(idioms_vec[0]);
+        size_t current_freq = 1;
+        size_t current_len = std::get<2>(idioms_vec[0]);
+        size_t current_offset = std::get<3>(idioms_vec[0]);
+        for (const auto& [hash, freq1, len, offset] : idioms_vec) {
+            if (current_hash != hash) {
+                idioms.push_back({current_freq, current_len, current_offset});
+
+                current_hash = hash;
+                current_freq = 1;
+                current_len = len;
+                current_offset = offset;
+            } else current_freq++;
+        }
     }
 
     void print_results() {
         // Sort by freq
-        std::sort(idioms_vec.begin(), idioms_vec.end(), [](const auto& a, const auto& b) {
-            return std::get<1>(a) > std::get<1>(b);
+        std::sort(idioms.begin(), idioms.end(), [](const auto& a, const auto& b) {
+            return std::get<0>(a) > std::get<0>(b);
         });
         // Bytes to text
-        for (const auto& [idiom_hash, idiom_freq, idiom_size, idiom_offset] : idioms_vec) {
+        for (const auto& [idiom_freq, idiom_size, idiom_offset] : idioms) {
             std::string text;
             size_t pos_in_idiom = 0;
             std::cout << idiom_freq << " ";
