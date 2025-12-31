@@ -11,10 +11,6 @@
 #include <string>
 #include <set>
 
-#include "lamaa.hpp"
-
-using namespace Bytecode;
-
 class RuntimeError : public std::exception {
 private:
     std::string message;
@@ -122,6 +118,25 @@ private:
     std::vector<bool> jump_targets;
     std::vector<std::tuple<size_t, uint32_t, uint32_t, uint32_t>> idioms_vec; // (hash, freq, len, pos)
 
+    enum class InstrState {
+        is_jump,
+        is_cond_jump,
+        is_call,
+        is_terminal,
+        other
+    };
+    using instruction_info_tuple = std::tuple<std::string, size_t, InstrState>;
+    bool instr_is_jump(const instruction_info_tuple &instr_info) {
+        return (std::get<2>(instr_info) == InstrState::is_jump) || (std::get<2>(instr_info) == InstrState::is_cond_jump);
+    }
+    bool instr_is_call(const instruction_info_tuple &instr_info) {
+        return std::get<2>(instr_info) == InstrState::is_call;
+    }
+    bool instr_is_terminal(const instruction_info_tuple &instr_info) {
+        return (std::get<2>(instr_info) == InstrState::is_terminal) ||
+            (std::get<2>(instr_info) == InstrState::is_jump); // regular jump is also a terminal instruction
+    }
+
 public:
     IdiomAnalyzer(bytefile* bytefile) : bf(bytefile) {}
 
@@ -149,11 +164,12 @@ public:
             workset.pop_back();
 
             uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
-            size_t len = instr_length(addr, bf->code_ptr, code_size);
+            auto instr_info = instruction_info(bf->code_ptr, addr, code_size);
+            size_t len = std::get<1>(instr_info);
             check(addr + len <= code_size, "len overflows code_size", addr);
 
             // Add a target to CFG, if it's jump/call
-            if (is_jump(opcode) || is_call(opcode)) {
+            if (instr_is_jump(instr_info) || instr_is_call(instr_info)) {
                 int32_t target = read_int32(bf->code_ptr, addr + 1, code_size);
                 check(target < code_size, "JMP/CJMPZ/CJMPNZ/CALL/CALLC: target overflows code_size", addr);
                 jump_targets[target] = true;
@@ -164,7 +180,7 @@ public:
             }
 
             // Add next instruction to CFG, if we haven't been there yet
-            if (!is_terminal(opcode)) {
+            if (!instr_is_terminal(instr_info)) {
                 size_t next_addr = addr + len;
                 if (next_addr < code_size && !reachable[next_addr]) {
                     reachable[next_addr] = true;
@@ -200,18 +216,20 @@ public:
                 continue;
             }
 
-            size_t len1 = instr_length(addr, bf->code_ptr, code_size);
+            auto instr_info = instruction_info(bf->code_ptr, addr, code_size);
+            size_t len1 = std::get<1>(instr_info);
             check(addr + len1 <= code_size, "len overflows code_size", addr);
 
             // 1-instr idiom always counts
             std::string instr1(bf->code_ptr + addr, len1);
             remember_idiom(addr, instr1, len1, hasher);
 
-            if (!is_terminal(opcode) && !is_call(opcode)) { // non-terminal && non-call -> we shouldn't split idiom
+            if (!instr_is_terminal(instr_info) && !instr_is_call(instr_info)) { // non-terminal && non-call -> we shouldn't split idiom
                 size_t next_addr = addr + len1;
                 uint8_t next_opcode = static_cast<uint8_t>(bf->code_ptr[next_addr]);
                 if (next_addr < code_size && reachable[next_addr] && !jump_targets[next_addr]) {
-                    size_t len2 = instr_length(next_addr, bf->code_ptr, code_size);
+                    auto instr_info2 = instruction_info(bf->code_ptr, next_addr, code_size);
+                    size_t len2 = std::get<1>(instr_info2);
                     check(next_addr + len2 <= code_size, "len overflows code_size", addr);
                     std::string instr2(bf->code_ptr + addr, len1 + len2);
                     remember_idiom(addr, instr2, len1 + len2, hasher);
@@ -222,8 +240,8 @@ public:
         }
     }
 
-    // (instruction string, instruction length)
-    std::pair<std::string, uint32_t> instruction_info(const char* code, size_t start, size_t end) {
+    // (instruction string, instruction length, State)
+    std::tuple<std::string, size_t, InstrState> instruction_info(const char* code, size_t start, size_t end) {
         uint8_t x = static_cast<uint8_t>(code[start]);
 
         const char *ops[] = {" +", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"};
@@ -234,35 +252,35 @@ public:
         auto sz = end;
         switch (h) {
             case 15:
-                return {"STOP", 1};
+                return {"STOP", 1, InstrState::is_terminal};
             case 0:
-                return {std::string("BINOP ") + ops[l - 1], 1};
+                return {std::string("BINOP ") + ops[l - 1], 1, InstrState::other};
             case 1: {
                 switch (l) {
                     case 0:
-                        return {"CONST " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {"CONST " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::other};
                     case 1:
-                        return {std::string("STRING ") + get_string(bf, read_int32(code, start + 1, sz)), 5};
+                        return {std::string("STRING ") + get_string(bf, read_int32(code, start + 1, sz)), 5, InstrState::other};
                     case 2:
-                        return {std::string("SEXP ") + get_string(bf, read_int32(code, start + 1, sz)), 9};
+                        return {std::string("SEXP ") + get_string(bf, read_int32(code, start + 1, sz)), 9, InstrState::other};
                     case 3:
-                        return {"STI", 1};
+                        return {"STI", 1, InstrState::other};
                     case 4:
-                        return {"STA", 1};
+                        return {"STA", 1, InstrState::other};
                     case 5:
-                        return {"JMP " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {"JMP " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::is_jump};
                     case 6:
-                        return {"END", 1};
+                        return {"END", 1, InstrState::is_terminal};
                     case 7:
-                        return {"RET", 1};
+                        return {"RET", 1, InstrState::is_terminal};
                     case 8:
-                        return {"DROP", 1};
+                        return {"DROP", 1, InstrState::other};
                     case 9:
-                        return {"DUP", 1};
+                        return {"DUP", 1, InstrState::other};
                     case 10:
-                        return {"SWAP", 1};
+                        return {"SWAP", 1, InstrState::other};
                     case 11:
-                        return {"ELEM", 1};
+                        return {"ELEM", 1, InstrState::other};
 
                     default:
                         check(false, "unknown instruction", start);
@@ -274,13 +292,13 @@ public:
                 std::string res = lds[h - 2];
                 switch (l) {
                     case 0:
-                        return {res + " G " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {res + " G " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::other};
                     case 1:
-                        return {res + " L " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {res + " L " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::other};
                     case 2:
-                        return {res + " A " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {res + " A " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::other};
                     case 3:
-                        return {res + " C " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {res + " C " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::other};
                     default:
                         check(false, "unknown instruction", start);
                 }
@@ -288,13 +306,13 @@ public:
             case 5: {
                 switch (l) {
                     case 0:
-                        return {"CJMPz " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {"CJMPz " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::is_cond_jump};
                     case 1:
-                        return {"CJMPnz " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {"CJMPnz " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::is_cond_jump};
                     case 2:
-                        return {"BEGIN  " + std::to_string(read_int32(code, start + 1, sz)), 9};
+                        return {"BEGIN  " + std::to_string(read_int32(code, start + 1, sz)), 9, InstrState::other};
                     case 3:
-                        return {"CBEGIN  " + std::to_string(read_int32(code, start + 1, sz)), 9};
+                        return {"CBEGIN  " + std::to_string(read_int32(code, start + 1, sz)), 9, InstrState::other};
                     case 4: {
                         std::string result = "CLOSURE";
                         size_t length = 9; // 1 (opcode) + 4 (addr) + 4 (n) + 5 * n, where 5 is a value of varspec
@@ -321,41 +339,41 @@ public:
                                 result += " " + type_str + "(" + std::to_string(addr) + ")";
                                 pos += 5;
                             }
-                            return {result, length};
+                            return {result, length, InstrState::other};
                         }
                         break;
                     }
                     case 5:
-                        return {"CALLC " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {"CALLC " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::is_call};
                     case 6:
-                        return {"CALL " + std::to_string(read_int32(code, start + 1, sz)), 9};
+                        return {"CALL " + std::to_string(read_int32(code, start + 1, sz)), 9, InstrState::is_call};
                     case 7:
-                        return {std::string("TAG ") + get_string(bf, read_int32(code, start + 1, sz)), 9};
+                        return {std::string("TAG ") + get_string(bf, read_int32(code, start + 1, sz)), 9, InstrState::other};
                     case 8:
-                        return {"ARRAY " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {"ARRAY " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::other};
                     case 9:
-                        return {"FAIL " + std::to_string(read_int32(code, start + 1, sz)), 9};
+                        return {"FAIL " + std::to_string(read_int32(code, start + 1, sz)), 9, InstrState::is_terminal};
                     case 10:
-                        return {"LINE " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {"LINE " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::other};
 
                     default:
                         check(false, "unknown instruction", start);
                 }
             }
             case 6:
-                return {std::string("PATT ") + pats[l], 1};
+                return {std::string("PATT ") + pats[l], 1, InstrState::other};
             case 7: {
                 switch (l) {
                     case 0:
-                        return {"CALL Lread", 1};
+                        return {"CALL Lread", 1, InstrState::other};
                     case 1:
-                        return {"CALL Lwrite", 1};
+                        return {"CALL Lwrite", 1, InstrState::other};
                     case 2:
-                        return {"CALL Llength", 1};
+                        return {"CALL Llength", 1, InstrState::other};
                     case 3:
-                        return {"CALL Lstring", 1};
+                        return {"CALL Lstring", 1, InstrState::other};
                     case 4:
-                        return {"CALL Barray " + std::to_string(read_int32(code, start + 1, sz)), 5};
+                        return {"CALL Barray " + std::to_string(read_int32(code, start + 1, sz)), 5, InstrState::other};
 
                     default:
                         check(false, "unknown instruction", start);
@@ -365,11 +383,7 @@ public:
             default:
                 check(false, "unknown instruction", start);
         }
-        return {"", 0};
-    }
-
-    size_t instr_length(size_t pos, const char* code, size_t buffer_size) {
-        return instruction_info(code, pos, buffer_size).second;
+        return {"", 0, InstrState::other};
     }
 
     void print_results() {
@@ -383,10 +397,10 @@ public:
             size_t pos_in_idiom = 0;
             while (pos_in_idiom < idiom_size) {
                 auto pos = idiom_offset + pos_in_idiom;
-                uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[pos]);
-                size_t len = instr_length(pos, bf->code_ptr, code_size);
+                auto instr_info = instruction_info(bf->code_ptr, pos, code_size);
+                size_t len = std::get<1>(instr_info);
                 check(pos_in_idiom + len <= idiom_size, "ill-formed idiom", idiom_offset);
-                std::string instr_str = instruction_info(bf->code_ptr, pos, pos + len).first;
+                std::string instr_str = std::get<0>(instr_info);
                 if (!text.empty())
                     text += "; ";
                 text += instr_str;
