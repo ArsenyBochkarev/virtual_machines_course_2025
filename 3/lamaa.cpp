@@ -3,7 +3,7 @@
 #include <fstream>
 #include <functional>
 #include <vector>
-#include <unordered_map>
+#include <tuple>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -121,8 +121,7 @@ private:
     std::vector<bool> reachable;
     std::vector<bool> jump_targets;
 
-    std::unordered_map<size_t, uint32_t> idioms; // idiom hash -> freq
-    std::unordered_map<size_t, std::pair<uint32_t, uint32_t>> idioms_info; // idiom hash -> (idiom len, idiom position in bf->code_ptr)
+    std::vector<std::tuple<size_t, uint32_t, uint32_t, uint32_t>> idioms_vec; // (hash, freq, len, pos)
 
     bool should_split_after(uint8_t opcode) {
         return opcode == JMP || opcode == CALL || opcode == CALLC || opcode == RET || opcode == END || opcode == FAIL;
@@ -181,9 +180,14 @@ public:
     }
 
     void remember_idiom(size_t addr, const std::string &str, size_t sz, const std::hash<std::string> &hasher) {
-        auto instr1_hash = hasher(str);
-        idioms[instr1_hash]++;
-        idioms_info[instr1_hash] = std::make_pair(sz, addr);
+        auto instr_hash = hasher(str);
+        auto it = std::find_if(idioms_vec.begin(), idioms_vec.end(), [instr_hash](const auto& t) {
+            return std::get<0>(t) == instr_hash;
+        });
+        if (it != idioms_vec.end()) // Idiom is in idioms_vec
+            std::get<1>(*it) += 1;
+        else
+            idioms_vec.push_back({instr_hash, 1, sz, addr});
     }
 
     void find_idioms() {
@@ -463,20 +467,14 @@ public:
     }
 
     void print_results() {
-        check(idioms.size() == idioms_info.size(), "idioms and idioms_info sizes should be same", 0);
-
-        std::vector<std::pair<size_t, uint32_t>> sorted_idioms(idioms.begin(), idioms.end());
-        std::sort(sorted_idioms.begin(), sorted_idioms.end(), [](const auto& a, const auto& b) {
-            return a.second > b.second; 
+        // Sort by freq
+        std::sort(idioms_vec.begin(), idioms_vec.end(), [](const auto& a, const auto& b) {
+            return std::get<1>(a) > std::get<1>(b);
         });
-
         // Bytes to text
-        for (const auto& [idiom_key, idiom_freq] : sorted_idioms) {
+        for (const auto& [idiom_hash, idiom_freq, idiom_size, idiom_offset] : idioms_vec) {
             std::string text;
             size_t pos_in_idiom = 0;
-            size_t idiom_size = idioms_info[idiom_key].first;
-            size_t idiom_offset = idioms_info[idiom_key].second;
-
             while (pos_in_idiom < idiom_size) {
                 auto pos = idiom_offset + pos_in_idiom;
                 uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[pos]);
