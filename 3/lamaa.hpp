@@ -2,7 +2,6 @@
 #define LAMAA_HPP
 
 #include <cstdint>
-#include <string>
 
 namespace Bytecode {
     constexpr uint8_t JMP    = 0x15;
