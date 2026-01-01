@@ -132,31 +132,18 @@ public:
         inline static bytefile* bf;
 
         uint32_t offset;
-        bool is_two_instr; // false -- 1-instr idiom, true -- 2-instr idiom
 
-        uint32_t get_idiom_len() const {
+        uint32_t get_two_instrs_idiom_len() const {
             uint32_t length = disassemble_instruction(bf, offset, stdin);
-            if (is_two_instr)
-                length += disassemble_instruction(bf, offset + length, stdin);
+            length += disassemble_instruction(bf, offset + length, stdin);
             return length;
         }
-
-        bool operator<(const idiom_data& other) const {
-            uint32_t length = get_idiom_len();
-            uint32_t other_length = other.get_idiom_len();
-            if (length != other_length)
-                return length < other_length;
-            return std::memcmp(bf->code_ptr + offset, bf->code_ptr + other.offset, length) < 0;
-        }
-        bool operator==(const idiom_data& other) const {
-            uint32_t length = get_idiom_len();
-            if (length != other.get_idiom_len())
-                return false;
-            return std::memcmp(bf->code_ptr + offset, bf->code_ptr + other.offset, length) == 0;
+        uint32_t get_one_instr_idiom_len() const {
+            return disassemble_instruction(bf, offset, stdin);
         }
     };
-    std::vector<idiom_data> idioms_vec;
-    std::vector<std::pair<uint32_t, idiom_data>> idioms;
+    std::vector<std::pair<uint32_t, idiom_data>> one_instr_freq; // (freq, offset)
+    std::vector<std::pair<uint32_t, idiom_data>> two_instr_freq; // (freq, offset)
 
     IdiomAnalyzer(bytefile* bytefile) : bf(bytefile) {
         idiom_data::bf = bf;
@@ -211,15 +198,12 @@ public:
         }
     }
 
-    void remember_idiom(size_t addr, bool is_two_instr) {
-        idioms_vec.push_back({addr, is_two_instr});
-    }
-
     void find_idioms() {
         if (!bf)
             return;
 
-        std::hash<std::string> hasher;
+        std::vector<idiom_data> one_instr_idioms_vec;
+        std::vector<idiom_data> two_instr_idioms_vec;
         size_t addr = 0;
         while (addr < code_size) {
             uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
@@ -234,7 +218,7 @@ public:
             check(addr + len1 <= code_size, "len overflows code_size", addr);
 
             // 1-instr idiom always counts
-            remember_idiom(addr, /*is_two_instr=*/false);
+            one_instr_idioms_vec.push_back({addr});
 
             if (!is_terminal(opcode) && !is_call(opcode)) { // non-terminal && non-call -> we shouldn't split idiom
                 size_t next_addr = addr + len1;
@@ -242,48 +226,90 @@ public:
                 if (reachable[next_addr] && !jump_targets[next_addr]) {
                     size_t len2 = instr_length(next_addr);
                     check(next_addr + len2 <= code_size, "len overflows code_size", addr);
-                    remember_idiom(addr, /*is_two_instr=*/true);
+                    two_instr_idioms_vec.push_back({addr});
                 }
             }
             addr += len1;
         }
-        if (idioms_vec.empty())
+        if (one_instr_idioms_vec.empty())
+            return;
+        if (two_instr_idioms_vec.empty())
             return;
 
-        std::sort(idioms_vec.begin(), idioms_vec.end());
-        auto current_idiom = idioms_vec[0];
-        size_t current_freq = 1;
-        for (int i = 0; i < idioms_vec.size(); i++) {
-            if (current_idiom == idioms_vec[i]) current_freq++;
+        // Counting freq for 1-instr idioms
+        std::sort(one_instr_idioms_vec.begin(), one_instr_idioms_vec.end(), [this](const auto& a, const auto& b) {
+            uint32_t length = a.get_one_instr_idiom_len();
+            return std::memcmp(bf->code_ptr + a.offset, bf->code_ptr + b.offset, length) < 0;
+        });
+        auto current_idiom = one_instr_idioms_vec[0];
+        auto current_idiom_len = current_idiom.get_one_instr_idiom_len();
+        size_t current_freq = 0;
+        for (int i = 0; i < one_instr_idioms_vec.size(); i++) {
+            if (std::memcmp(bf->code_ptr + current_idiom.offset, bf->code_ptr + one_instr_idioms_vec[i].offset, current_idiom_len) == 0)
+                current_freq++;
             else {
-                idioms.push_back({current_freq, idioms_vec[i]});
-                current_idiom = idioms_vec[i];
+                one_instr_freq.push_back({current_freq, current_idiom});
+                current_idiom = one_instr_idioms_vec[i];
                 current_freq = 1;
+                current_idiom_len = current_idiom.get_one_instr_idiom_len();
+            }
+        }
+
+        // Counting freq for 2-instr idioms
+        std::sort(two_instr_idioms_vec.begin(), two_instr_idioms_vec.end(), [this](const auto& a, const auto& b) {
+            uint32_t length = a.get_two_instrs_idiom_len();
+            return std::memcmp(bf->code_ptr + a.offset, bf->code_ptr + b.offset, length) < 0;
+        });
+        current_idiom = two_instr_idioms_vec[0];
+        current_idiom_len = current_idiom.get_two_instrs_idiom_len();
+        current_freq = 0;
+        for (int i = 0; i < two_instr_idioms_vec.size(); i++) {
+            if (std::memcmp(bf->code_ptr + current_idiom.offset, bf->code_ptr + two_instr_idioms_vec[i].offset, current_idiom_len) == 0)
+                current_freq++;
+            else {
+                two_instr_freq.push_back({current_freq, current_idiom});
+                current_idiom = two_instr_idioms_vec[i];
+                current_freq = 1;
+                current_idiom_len = current_idiom.get_two_instrs_idiom_len();
             }
         }
     }
 
     void print_results() {
         // Sort by freq
-        std::sort(idioms.begin(), idioms.end(), [](const auto& a, const auto& b) {
+        std::sort(one_instr_freq.begin(), one_instr_freq.end(), [](const auto& a, const auto& b) {
+            return a.first > b.first;
+        });
+        std::sort(two_instr_freq.begin(), two_instr_freq.end(), [](const auto& a, const auto& b) {
             return a.first > b.first;
         });
 
         // Bytes to text
-        for (const auto& [idiom_freq, idiom] : idioms) {
-            std::string text;
-            size_t pos_in_idiom = 0;
+        int ind1 = 0, ind2 = 0;
+        while (ind1 < one_instr_freq.size() || ind2 < two_instr_freq.size()) {
+            auto take_idiom = 2;
+            if (ind1 < one_instr_freq.size() && ind2 < two_instr_freq.size())
+                take_idiom = one_instr_freq[ind1].first > two_instr_freq[ind2].first ? 1 : 2;
+            else if (ind1 < one_instr_freq.size())
+                take_idiom = 1;
+
+            auto idiom_freq = (take_idiom == 1) ? one_instr_freq[ind1].first : two_instr_freq[ind2].first;
             std::cout << idiom_freq << " ";
-            auto idiom_size = idiom.get_idiom_len();
+
+            size_t pos_in_idiom = 0;
+            auto idiom_size = (take_idiom == 1) ? one_instr_freq[ind1].second.get_one_instr_idiom_len() : two_instr_freq[ind2].second.get_two_instrs_idiom_len();
+            auto idiom_offset = (take_idiom == 1) ? one_instr_freq[ind1].second.offset : two_instr_freq[ind2].second.offset;
             while (pos_in_idiom < idiom_size) {
-                auto pos = idiom.offset + pos_in_idiom;
-                size_t len = instr_length(pos);
-                check(pos_in_idiom + len <= idiom_size, "ill-formed idiom", idiom.offset);
-                disassemble_instruction(bf, pos, stdout);
+                auto pos = idiom_offset + pos_in_idiom;
+                size_t len = disassemble_instruction(bf, pos, stdout);
                 std::cout << "; ";
+                check(pos_in_idiom + len <= idiom_size, "ill-formed idiom", idiom_offset);
                 pos_in_idiom += len;
             }
             std::cout << std::endl;
+            if (take_idiom == 1)
+                ind1++;
+            else ind2++;
         }
     }
 
