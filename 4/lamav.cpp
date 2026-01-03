@@ -67,16 +67,7 @@ private:
         jump_targets.fill(false);
 
         std::vector<int32_t> workset;
-        for (int i = 0; i < bf->public_symbols_number; i++) {
-            size_t addr = bf->public_ptr[i * 2 + 1]; // index for code_ptr (like vm.ip in lamai)
-            check(addr < code_size, "addr from public_symbols overflows code_size", addr);
-            if (reachable[addr])
-                continue;
-            reachable[addr] = true;
-            jump_targets[addr] = true; // public_symbol is also a jump target
-            workset.push_back(addr);
-        }
-
+        workset.push_back(0); // Same starting point as in lamai
         while (!workset.empty()) {
             size_t offset = workset.back();
             workset.pop_back();
