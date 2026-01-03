@@ -1,3 +1,6 @@
 [submodule "2/Lama"]
 	path = 2/Lama
 	url = https://github.com/PLTools/Lama.git
+[submodule "4/Lama"]
+	path = 4/Lama
+	url = https://github.com/PLTools/Lama.git
