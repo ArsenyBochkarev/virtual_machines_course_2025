@@ -6,6 +6,7 @@
 constexpr uint32_t MAX_STACK_SIZE = 10000;
 constexpr uint32_t MAX_FRAMES_NUM = 10000;
 constexpr uint32_t MAX_FILE_SIZE = 1024 * 256 * 1;
+constexpr int32_t PROC_STACK_MAP = MAX_STACK_SIZE / 2;
 
 namespace Bytecode {
     constexpr uint8_t BINOP_HIGH   = 0x00;

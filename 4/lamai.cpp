@@ -787,16 +787,7 @@ struct VMState {
     }
 };
 
-void interpret(bytefile *bf, char *fname) {
-    VMState vm;
-    vm.bf = bf;
-    vm.ip = 0;
-    vm.code = bf->code_ptr;
-    vm.global_area_size = bf->global_area_size;
-    vm.tmp_is_closure = false;
-    vm.fname = fname;
-    vm.frames_top = 0;
-
+void interpret(VMState &vm, bytefile *bf, char *fname) {
     check(bf->global_area_size + 2 < MAX_STACK_SIZE, "initial stack size exceeds maximum. Offset: 0x%x\n", 0);
     // We use virtual stack here
     __gc_stack_top = static_cast<size_t *>(&vm.stack[0]);
@@ -879,8 +870,18 @@ int main(int argc, char* argv[])
     __init();
     bytefile f;
     auto *bf = read_file(argv[1], &f);
-    verify_bytecode(bf);
-    interpret(bf, argv[1]);
+
+    VMState vm;
+    vm.bf = bf;
+    vm.ip = 0;
+    vm.code = bf->code_ptr;
+    vm.global_area_size = bf->global_area_size;
+    vm.tmp_is_closure = false;
+    vm.fname = argv[1];
+    vm.frames_top = 0;
+
+    verify_bytecode(vm.stack, bf);
+    interpret(vm, bf, argv[1]);
     __shutdown();
     return 0;
 }

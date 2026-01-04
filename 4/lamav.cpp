@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <tuple>
 #include <vector>
 
 #include "bytefile.hpp"
@@ -14,6 +15,7 @@
 
 using namespace Closure;
 
+struct VMState;
 unsigned disassemble_instruction(const bytefile* bf, unsigned offset, FILE* f);
 
 int32_t read_int32(const char* data, size_t pos) {
@@ -33,6 +35,11 @@ class Verifier {
 private:
     bytefile* bf;
     char* code;
+
+    auint *stack;
+    auint *procedures_stack_ptr;
+    auint *instructions_stack_ptr;
+
     int32_t global_area_size;
     int32_t stringtab_size;
 
@@ -49,188 +56,119 @@ private:
         BasicBlock head_bb;
     };
 
-    std::array<ProcedureInfo, MAX_PROCEDURES> procedures;
     size_t proc_num = 0;
-
-    std::array<BasicBlock, MAX_FILE_SIZE> basic_blocks;
     std::array<int32_t, MAX_FILE_SIZE> stack_heights;
-
-    std::array<bool, MAX_FILE_SIZE> reachable;
     std::array<bool, MAX_FILE_SIZE> jump_targets;
 
     size_t instr_length(size_t start) {
         return disassemble_instruction(bf, start, stdin);
     }
 
-    void build_basic_blocks() {
-        reachable.fill(false);
-        jump_targets.fill(false);
-
-        std::vector<int32_t> workset;
-        workset.push_back(0); // Same starting point as in lamai
-        while (!workset.empty()) {
-            size_t offset = workset.back();
-            workset.pop_back();
-
-            BasicBlock block;
-            block.start_offset = offset;
-            block.successors.fill(NO_SUCCESSOR_OFFSET);
-            int32_t current_offset = offset;
-            // Traverse instructions in BB
-            while (true) {
-                // Skip already visited instructions
-                if (current_offset != offset && reachable[current_offset])
-                    break;
-
-                // We shouldn't be able to jump in the middle of BB
-                if (current_offset != offset && jump_targets[current_offset]) {
-                    block.end_offset = current_offset;
-                    break;
-                }
-
-                uint8_t opcode = static_cast<uint8_t>(code[current_offset]);
-                int32_t length = instr_length(current_offset);
-                check(current_offset + length <= code_size, "len overflows code_size", offset);
-
-                if (opcode == Bytecode::BEGIN || opcode == Bytecode::CBEGIN) {
-                    check(proc_num + 1 <= MAX_PROCEDURES, "too many procedures. Offset: 0x%x\n", current_offset);
-                    proc_num++;
-                }
-                basic_blocks[current_offset] = block;
-
-                // Add a target to CFG, if it's jump/call
-                if (opcode == Bytecode::JMP || opcode == Bytecode::CJMPZ ||
-                    opcode == Bytecode::CJMPNZ || opcode == Bytecode::CALL ||
-                    opcode == Bytecode::CALLC) {
-
-                    if (opcode != Bytecode::CALLC) { // We can't get target for CALLC statically
-                        int32_t target = read_int32(code, current_offset + 1);
-                        check(target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", current_offset);
-                        jump_targets[target] = true;
-                        if (!reachable[target]) {
-                            reachable[target] = true;
-                            block.successors[0] = target;
-                            workset.push_back(target);
-                        }
-                    }
-
-                    // Conditional jumps have multiple successors
-                    if (opcode == Bytecode::CJMPZ || opcode == Bytecode::CJMPNZ) {
-                        int32_t next_offset = current_offset + length;
-                        if (!reachable[next_offset]) {
-                            reachable[next_offset] = true;
-                            block.successors[1] = next_offset;
-                            workset.push_back(next_offset);
-                        }
-                    }
-
-                    // End of BB
-                    block.end_offset = current_offset + length;
-                    break;
-                }
-
-                // Basic block also ends when procedure ends
-                if (opcode == Bytecode::END || opcode == Bytecode::RET || 
-                    opcode == Bytecode::FAIL) {
-                    block.end_offset = current_offset + length;
-                    break;
-                }
-
-                current_offset += length;
-                reachable[current_offset] = true;
-                check(current_offset < code_size, "basic blocks overflows exceeds code size. Offset: 0x%x\n", current_offset);
-            }
-        }
+    void push_proc(int32_t proc_start_offset, int32_t proc_max_stack_sz) {
+        *procedures_stack_ptr = proc_start_offset;
+        *(procedures_stack_ptr + 1) = proc_max_stack_sz;
+        procedures_stack_ptr += 2;
+        proc_num++;
+    }
+    // (procedure start offset, max stack size)
+    std::pair<int32_t, int32_t> pop_proc() {
+        auto offset = *(procedures_stack_ptr - 2);
+        auto stack_sz = *(procedures_stack_ptr - 1);
+        procedures_stack_ptr -= 2;
+        proc_num--;
+        return std::make_pair(offset, stack_sz);
+    }
+    std::pair<int32_t, int32_t> peek_proc(int32_t offset = 0) {
+        auto start_offset = *(procedures_stack_ptr - 2 - 2*offset);
+        auto stack_sz = *(procedures_stack_ptr - 1 - 2*offset);
+        return std::make_pair(start_offset, stack_sz);
+    }
+    int32_t proc_stack_size() {
+        return (procedures_stack_ptr - stack) / 2;
     }
 
-    void build_procedures() {
-        size_t addr = 0;
-        size_t proc = 0;
-        while (addr < code_size) {
-            uint8_t opcode = static_cast<uint8_t>(bf->code_ptr[addr]);
-            if (!reachable[addr]) {
-                // Code here may be ill-formed, but it's OK since interpreter won't execute it anyway
-                // Skip this code byte-by-byte
-                addr += 1;
-                continue;
-            }
-
-            size_t len = instr_length(addr);
-            check(addr + len <= code_size, "len overflows code_size", addr);
-            if (opcode != Bytecode::BEGIN && opcode != Bytecode::CBEGIN) {
-                addr += len;
-                continue;
-            }
-
-            ProcedureInfo current_proc;
-            current_proc.head_bb = basic_blocks[addr];
-            current_proc.start_offset = current_proc.head_bb.start_offset;
-            current_proc.is_closure = (opcode == Bytecode::CBEGIN);
-
-            int32_t arg_count_offset = current_proc.start_offset + /*BEGIN/CBEGIN instruction size =*/1;
-            int32_t local_count_offset = arg_count_offset + sizeof(int32_t);
-            int32_t local_count = read_int32(code, local_count_offset);
-            current_proc.arg_count = read_int32(code, arg_count_offset);
-            current_proc.local_count = read_int32(code, local_count);
-            check(current_proc.arg_count >= 0 && current_proc.local_count >= 0, "negative argument or local count. Offset: 0x%x\n", addr);
-            check(current_proc.local_count <= MAX_LOCAL_COUNT, "local count too large. Offset: 0x%x\n", addr);
-
-            procedures[proc++] = current_proc;
-        }
+    void push_instr(int32_t offset, int32_t height, int32_t proc) {
+        *instructions_stack_ptr = offset;
+        *(instructions_stack_ptr + 1) = height;
+        *(instructions_stack_ptr + 2) = proc;
+        instructions_stack_ptr += 3;
+    }
+    // (offset, height, procedure)
+    std::tuple<int32_t, int32_t, int32_t> pop_instr() {
+        auto offset = *(instructions_stack_ptr - 3);
+        auto height = *(instructions_stack_ptr - 2);
+        auto proc = *(instructions_stack_ptr - 1);
+        instructions_stack_ptr -= 3;
+        return std::make_tuple(offset, height, proc);
+    }
+    std::tuple<int32_t, int32_t, int32_t> peek_instr(int32_t offset = 0) {
+        auto instr_offset = *(instructions_stack_ptr - 3 - 3*offset);
+        auto height = *(instructions_stack_ptr - 2 - 3*offset);
+        auto proc = *(instructions_stack_ptr - 1 - 3*offset);
+        return std::make_tuple(instr_offset, height, proc);
+    }
+    int32_t instr_stack_size() {
+        return ((instructions_stack_ptr - stack) - PROC_STACK_MAP)/3;
     }
 
-    void verify_stack(const ProcedureInfo& proc) {
+    void traverse() {
         stack_heights.fill(NO_STACK_HEIGHT_VAL);
-        int32_t max_stack = 0;
-        
-        int32_t initial_height = proc.arg_count; // Procedure shouldn't know about stack outside arguments
-        if (proc.is_closure)
-            initial_height += 1; // +1 for CLOSURE
+        int32_t current_stack_height = 0;
+        int32_t start_pt = 0; // Same starting point as in lamai
+        push_instr(start_pt, current_stack_height, proc_num);
+        while (instr_stack_size()) {
+            auto [offset, current_stack_height, current_proc] = pop_instr();
 
-        stack_heights[proc.start_offset] = initial_height;
-        std::vector<BasicBlock> workset;
-        workset.push_back(proc.head_bb);
-        while (!workset.empty()) {
-            BasicBlock bb = workset.back();
-            workset.pop_back();
-            int32_t offset = bb.start_offset;
+            uint8_t opcode = static_cast<uint8_t>(code[offset]);
+            int32_t length = instr_length(offset);
+            check(offset + length <= code_size, "len overflows code_size", offset);
 
-            int32_t current_height = stack_heights[offset];
-            int32_t block_max_height = current_height;
-            int32_t current_offset = offset;
-            while (current_offset < bb.end_offset) {
-                auto stack_effect = get_stack_effect(code, current_offset);
-                int32_t pop_count = stack_effect.first;
-                check(current_height >= pop_count, "stack underflow. Offset: 0x%x\n", current_offset);
-
-                int32_t push_count = stack_effect.second;
-                current_height = current_height - pop_count + push_count;
-                check(current_height <= MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", current_offset);
-
-                block_max_height = std::max(current_height, block_max_height);
-                current_offset += instr_length(current_offset);
+            auto stack_effect = get_stack_effect(code, offset);
+            current_stack_height += (stack_effect.second - stack_effect.first);
+            // Skip already visited instructions
+            if (stack_heights[offset] != NO_STACK_HEIGHT_VAL) {
+                check(stack_heights[offset] == current_stack_height, "stack height mismatch at merge point. Offset: 0x%x\n", offset);
+                continue;
             }
-            max_stack = std::max(max_stack, block_max_height);
+            stack_heights[offset] = current_stack_height;
+            if (proc_stack_size())
+                *procedures_stack_ptr = std::max(static_cast<auint>(current_stack_height), *procedures_stack_ptr);
+            // TODO: check stack over- and underflow
+            // TODO: verify_instruction here
 
-            for (int32_t succ_offset : bb.successors) {
-                if (stack_heights[succ_offset] != NO_STACK_HEIGHT_VAL) {
-                    // If successor's height was already calculated, check it's the same as current
-                    check(stack_heights[succ_offset] == current_height, "stack height mismatch at merge point. Offset: 0x%x\n", succ_offset);
-                } else {
-                    stack_heights[succ_offset] = current_height;
-                    workset.push_back(basic_blocks[succ_offset]);
-                }
+            if (opcode == Bytecode::BEGIN || opcode == Bytecode::CBEGIN)
+                push_proc(offset, current_stack_height);
+
+            if (opcode == Bytecode::JMP || opcode == Bytecode::CJMPZ || opcode == Bytecode::CJMPNZ) {
+                int32_t target = read_int32(code, offset + 1);
+                check(target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
+                push_instr(target, current_stack_height, proc_num);
+
+                // Unconditional jump have single successor
+                if (opcode == Bytecode::JMP)
+                    continue;
             }
+
+            if (opcode == Bytecode::END || opcode == Bytecode::RET || opcode == Bytecode::FAIL) {
+                auto [proc_start, proc_max_stack_size] = peek_proc();
+                // Check whether we need to dispose of current procedure or not
+                // If workset contains current procedure instructions, don't pop from proc_stack
+                if (instr_stack_size() > 1 && std::get<2>(peek_instr(1)) != current_proc)
+                    pop_proc();
+
+                // Use higher half-word from BEGIN/CBEGIN's local_count to save proc_max_stack_size
+                int32_t arg_count_offset = proc_start + /*BEGIN/CBEGIN instruction size =*/1;
+                int32_t local_count_offset = arg_count_offset + sizeof(int32_t);
+                int32_t local_count = read_int32(code, local_count_offset);
+
+                int32_t new_local_count_value = (proc_max_stack_size << 16) | (local_count & 0xFFFF);
+                std::memcpy(code + local_count_offset, &new_local_count_value, sizeof(int32_t));
+                continue;
+            }
+
+            auto next_offset = offset + length;
+            push_instr(next_offset, current_stack_height, proc_num);
         }
-        check(max_stack <= MAX_STACK_SIZE, "max_stack overflows MAX_STACK_SIZE. Offset: 0x%x\n", proc.start_offset);
-
-        // Use higher half-word from BEGIN/CBEGIN's local_count to save max_stack
-        int32_t arg_count_offset = proc.start_offset + /*BEGIN/CBEGIN instruction size =*/1;
-        int32_t local_count_offset = arg_count_offset + sizeof(int32_t);
-        int32_t local_count = read_int32(code, local_count_offset);
-
-        int32_t new_local_count_value = (max_stack << 16) | (local_count & 0xFFFF);
-        std::memcpy(code + local_count_offset, &new_local_count_value, sizeof(int32_t));
     }
 
     void verify_instructions(const ProcedureInfo& proc) {
@@ -360,23 +298,21 @@ private:
     }
 
 public:
-    Verifier(bytefile* bytefile) : bf(bytefile), code(bf->code_ptr),
+    Verifier(bytefile* bytefile, auint *st) : bf(bytefile), stack(st), code(bf->code_ptr),
                                    global_area_size(bf->global_area_size),
                                    stringtab_size(bf->stringtab_size) {
         stack_heights.fill(NO_STACK_HEIGHT_VAL);
+        procedures_stack_ptr = &st[0];
+        instructions_stack_ptr = &st[PROC_STACK_MAP];
     }
 
     void verify() {
         check(bf->public_symbols_number > 0, "corrupted public_symbols_number in file. Offset: 0x%x\n", 0);
-        build_basic_blocks();
-        for (int i = 0; i < proc_num; i++)
-            verify_stack(procedures[i]);
-        for (int i = 0; i < proc_num; i++)
-            verify_instructions(procedures[i]);
+        traverse();
     }
 };
 
-void verify_bytecode(bytefile *bf) {
-    Verifier verifier(bf);
+void verify_bytecode(auint *stack, bytefile *bf) {
+    Verifier verifier(bf, stack);
     verifier.verify();
 }

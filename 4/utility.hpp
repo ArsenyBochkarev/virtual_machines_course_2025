@@ -6,8 +6,8 @@
 constexpr uint32_t MAX_LOCAL_COUNT = 65535; // 0xFFFF
 constexpr uint32_t MAX_PROCEDURES = 20;
 constexpr uint32_t MAX_BB_SUCCESSORS = 2;
-constexpr uint32_t NO_SUCCESSOR_OFFSET = -1;
-constexpr uint32_t NO_STACK_HEIGHT_VAL = -1;
+constexpr int32_t NO_SUCCESSOR_OFFSET = -1;
+constexpr int32_t NO_STACK_HEIGHT_VAL = -1;
 
 void check(bool condition, char *msg, int32_t offset);
 int32_t read_int32(const char* data, size_t pos);
