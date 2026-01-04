@@ -249,7 +249,7 @@ private:
 
             case Bytecode::CLOSURE: {
                 int32_t target = read_int32(code, incr_offset);
-                check(target >= 0 && target <= code_size, "CLOSURE: invalid target address. Offset: 0x%x\n", offset);
+                check(target >= 0 && target < code_size, "CLOSURE: invalid target address. Offset: 0x%x\n", offset);
                 int32_t n = read_int32(code, incr_offset + sizeof(int32_t));
                 check(n >= 0, "CLOSURE: negative capture count. Offset: 0x%x\n", offset);
 
