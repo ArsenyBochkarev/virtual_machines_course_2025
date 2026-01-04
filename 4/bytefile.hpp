@@ -25,4 +25,7 @@ char* get_string(bytefile *f, int pos);
 /* Reads a binary bytecode file by name and unpacks it */
 bytefile* read_file(char *fname, bytefile *file);
 
+/* Gets a name for a public symbol */
+char *get_public_name(bytefile *f, int i);
+
 #endif // BYTEFILE_HPP
