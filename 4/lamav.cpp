@@ -77,11 +77,9 @@ private:
         while (stack_size()) {
             auto offset = pop();
             if (offset == STACK_MAP_GUARD) {
-                current_max_proc_stack = pop(); // current_max_proc_stack
-                start_offset = pop(); // start_offset
+                current_max_proc_stack = pop();
+                start_offset = pop();
                 proc_num--;
-                if (proc_num > 0)
-                    printf("fadfadsfaqsdfas");
                 continue;
             }
 
@@ -114,7 +112,8 @@ private:
             current_max_proc_stack = std::max(current_stack_height > 0 ? static_cast<auint>(current_stack_height) : 0, current_max_proc_stack);
 
             if (opcode == Bytecode::BEGIN || opcode == Bytecode::CBEGIN) {
-                push(offset);
+                push(start_offset);
+                start_offset = offset;
                 push(current_max_proc_stack);
                 push(STACK_MAP_GUARD);
                 proc_num++;
@@ -134,6 +133,12 @@ private:
                 // Unconditional jump have single successor
                 if (opcode == Bytecode::JMP)
                     continue;
+            }
+            if (opcode == Bytecode::CALL) {
+                int32_t target = read_int32(code, offset + 1);
+                check(target >= 0 && target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
+                stack_heights[target] = (-1) * current_stack_height - 2;
+                push(target);
             }
 
             verify_instruction(start_offset, offset, opcode);
@@ -265,7 +270,8 @@ private:
                 auto type_offset = incr_offset + sizeof(int32_t) + sizeof(int32_t);
                 for (int i = 0; i < n; i++) {
                     int8_t type = read_int8(code, type_offset);
-                    int32_t addr = read_int32(code, incr_offset + sizeof(int8_t));
+                    int32_t addr = read_int32(code, type_offset + sizeof(int8_t));
+                    type_offset += (sizeof(int32_t) + sizeof(int8_t));
                     switch (type) {
                         case G:
                             check(addr >= 0 && addr < global_area_size, "CLOSURE: global index out of bounds. Offset: 0x%x\n", offset);
