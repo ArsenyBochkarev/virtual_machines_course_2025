@@ -75,15 +75,14 @@ private:
     }
 
     void push_instr(int32_t offset, int32_t proc) {
-        *instructions_stack_ptr = offset;
-        *(instructions_stack_ptr + 1) = proc;
-        instructions_stack_ptr += 2;
+        *(instructions_stack_ptr++) = offset;
+        *(instructions_stack_ptr++) = proc;
     }
     // (offset, procedure)
     std::tuple<int32_t, int32_t> pop_instr() {
-        auto offset = *(instructions_stack_ptr - 2);
-        auto proc = *(instructions_stack_ptr - 1);
-        instructions_stack_ptr -= 3;
+        instructions_stack_ptr--;
+        auto proc = *(instructions_stack_ptr--);    
+        auto offset = *(instructions_stack_ptr);
         return std::make_tuple(offset, proc);
     }
     std::tuple<int32_t, int32_t> peek_instr(int32_t offset = 0) {
@@ -96,7 +95,6 @@ private:
     }
 
     void traverse() {
-        stack_heights.fill(NO_STACK_HEIGHT_VAL);
         int32_t current_stack_height = 0;
         push_instr(enter_pt, proc_num);
         while (instr_stack_size()) {
@@ -106,14 +104,25 @@ private:
             int32_t length = instr_length(offset);
             check(offset + length <= code_size, "len overflows code_size", offset);
 
+            if (stack_heights[offset] < NO_STACK_HEIGHT_VAL) // It's a jump target
+                current_stack_height = (-1) * stack_heights[offset] - 2;
+
             auto stack_effect = get_stack_effect(code, offset);
             current_stack_height += (stack_effect.second - stack_effect.first);
             check(current_stack_height >= 0, "stack underflow. Offset: 0x%x\n", offset);
             check(current_stack_height < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", offset);
 
             // Skip already visited instructions
-            if (stack_heights[offset] != NO_STACK_HEIGHT_VAL) {
-                check(stack_heights[offset] == current_stack_height, "stack height mismatch at merge point. Offset: 0x%x\n", offset);
+            if (stack_heights[offset] > NO_STACK_HEIGHT_VAL) {
+                if (!instr_stack_size())
+                    continue;
+
+                auto [next_instr, next_proc] = peek_instr();
+                // We need to set up next instruction
+                current_stack_height = stack_heights[next_instr];
+                check(stack_heights[next_instr] != NO_STACK_HEIGHT_VAL, "ill-formed control-flow. Offset: 0x%x\n", next_instr);
+                if (stack_heights[next_instr] > NO_STACK_HEIGHT_VAL) // stack_heights[next_instr] == NO_STACK_HEIGHT_VAL isn't valid scenario
+                    stack_heights[next_instr] = (-1) * current_stack_height - 2;
                 continue;
             }
             stack_heights[offset] = current_stack_height;
@@ -129,7 +138,13 @@ private:
             if (opcode == Bytecode::JMP || opcode == Bytecode::CJMPZ || opcode == Bytecode::CJMPNZ) {
                 int32_t target = read_int32(code, offset + 1);
                 check(target >= 0 && target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
-                push_instr(target, proc_num);
+                if (stack_heights[target] != NO_STACK_HEIGHT_VAL)
+                    check(stack_heights[offset] == current_stack_height, "stack height mismatch at merge point. Offset: 0x%x\n", offset);
+                else if (stack_heights[target] > NO_STACK_HEIGHT_VAL) {
+                    // if stack_heights[offset] < NO_STACK_HEIGHT_VAL we'll traverse it later anyway
+                    stack_heights[target] = (-1) * current_stack_height - 2;
+                    push_instr(target, proc_num);
+                }
 
                 // Unconditional jump have single successor
                 if (opcode == Bytecode::JMP)
@@ -151,11 +166,18 @@ private:
 
                 int32_t new_local_count_value = (proc_max_stack_size << 16) | (local_count & 0xFFFF);
                 std::memcpy(code + local_count_offset, &new_local_count_value, sizeof(int32_t));
+                if (!instr_stack_size())
+                    continue;
+
+                auto [next_instr, next_proc] = peek_instr();
+                // We need to set up next instruction
+                current_stack_height = stack_heights[next_instr];
+                if (stack_heights[next_instr] > NO_STACK_HEIGHT_VAL) // stack_heights[next_instr] == NO_STACK_HEIGHT_VAL isn't valid scenario
+                    stack_heights[next_instr] = (-1) * current_stack_height - 2;
                 continue;
             }
 
             auto next_offset = offset + length;
-            current_stack_height = stack_heights[offset];
             push_instr(next_offset, proc_num);
         }
     }
