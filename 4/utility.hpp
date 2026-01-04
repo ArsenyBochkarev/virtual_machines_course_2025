@@ -71,11 +71,12 @@ std::pair<int32_t, int32_t> get_stack_effect(const char *code, int32_t offset) {
             return {2, 2};
 
         case Bytecode::STA:
-            return {3, 1}; // Conservatively assume worst-case scenario of 3 operands popped
+            check(false, "STA can't be checked statically. Offset: 0x%x\n", offset);
+            return {-1, -1};
 
         case Bytecode::CLOSURE:{
             int32_t n = read_int32(code, offset + /*size of CLOSURE instruction=*/1 + sizeof(int32_t));
-            return {n + 1, 1};
+            return {0, n + 1};
         }
 
         case Bytecode::CALLC: {
