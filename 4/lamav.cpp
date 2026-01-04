@@ -74,36 +74,33 @@ private:
         return (procedures_stack_ptr - stack) / 2;
     }
 
-    void push_instr(int32_t offset, int32_t height, int32_t proc) {
+    void push_instr(int32_t offset, int32_t proc) {
         *instructions_stack_ptr = offset;
-        *(instructions_stack_ptr + 1) = height;
-        *(instructions_stack_ptr + 2) = proc;
-        instructions_stack_ptr += 3;
+        *(instructions_stack_ptr + 1) = proc;
+        instructions_stack_ptr += 2;
     }
-    // (offset, height, procedure)
-    std::tuple<int32_t, int32_t, int32_t> pop_instr() {
-        auto offset = *(instructions_stack_ptr - 3);
-        auto height = *(instructions_stack_ptr - 2);
+    // (offset, procedure)
+    std::tuple<int32_t, int32_t> pop_instr() {
+        auto offset = *(instructions_stack_ptr - 2);
         auto proc = *(instructions_stack_ptr - 1);
         instructions_stack_ptr -= 3;
-        return std::make_tuple(offset, height, proc);
+        return std::make_tuple(offset, proc);
     }
-    std::tuple<int32_t, int32_t, int32_t> peek_instr(int32_t offset = 0) {
-        auto instr_offset = *(instructions_stack_ptr - 3 - 3*offset);
-        auto height = *(instructions_stack_ptr - 2 - 3*offset);
-        auto proc = *(instructions_stack_ptr - 1 - 3*offset);
-        return std::make_tuple(instr_offset, height, proc);
+    std::tuple<int32_t, int32_t> peek_instr(int32_t offset = 0) {
+        auto instr_offset = *(instructions_stack_ptr - 2 - 2*offset);
+        auto proc = *(instructions_stack_ptr - 1 - 2*offset);
+        return std::make_tuple(instr_offset, proc);
     }
     int32_t instr_stack_size() {
-        return ((instructions_stack_ptr - stack) - PROC_STACK_MAP)/3;
+        return ((instructions_stack_ptr - stack) - PROC_STACK_MAP)/2;
     }
 
     void traverse() {
         stack_heights.fill(NO_STACK_HEIGHT_VAL);
         int32_t current_stack_height = 0;
-        push_instr(enter_pt, current_stack_height, proc_num);
+        push_instr(enter_pt, proc_num);
         while (instr_stack_size()) {
-            auto [offset, current_stack_height, current_proc] = pop_instr();
+            auto [offset, current_proc] = pop_instr();
 
             uint8_t opcode = static_cast<uint8_t>(code[offset]);
             int32_t length = instr_length(offset);
@@ -132,7 +129,7 @@ private:
             if (opcode == Bytecode::JMP || opcode == Bytecode::CJMPZ || opcode == Bytecode::CJMPNZ) {
                 int32_t target = read_int32(code, offset + 1);
                 check(target >= 0 && target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
-                push_instr(target, current_stack_height, proc_num);
+                push_instr(target, proc_num);
 
                 // Unconditional jump have single successor
                 if (opcode == Bytecode::JMP)
@@ -144,7 +141,7 @@ private:
             if (opcode == Bytecode::END || opcode == Bytecode::RET || opcode == Bytecode::FAIL) {
                 // Check whether we need to dispose of current procedure or not
                 // If workset contains current procedure instructions, don't pop from proc_stack
-                if (instr_stack_size() > 1 && std::get<2>(peek_instr(1)) != current_proc)
+                if (instr_stack_size() > 1 && std::get<1>(peek_instr(1)) != current_proc)
                     pop_proc();
 
                 // Use higher half-word from BEGIN/CBEGIN's local_count to save proc_max_stack_size
@@ -158,7 +155,8 @@ private:
             }
 
             auto next_offset = offset + length;
-            push_instr(next_offset, current_stack_height, proc_num);
+            current_stack_height = stack_heights[offset];
+            push_instr(next_offset, proc_num);
         }
     }
 
