@@ -35,6 +35,7 @@ class Verifier {
 private:
     bytefile* bf;
     char* code;
+    size_t enter_pt;
 
     auint *stack;
     auint *procedures_stack_ptr;
@@ -100,8 +101,7 @@ private:
     void traverse() {
         stack_heights.fill(NO_STACK_HEIGHT_VAL);
         int32_t current_stack_height = 0;
-        int32_t start_pt = 0; // Same starting point as in lamai
-        push_instr(start_pt, current_stack_height, proc_num);
+        push_instr(enter_pt, current_stack_height, proc_num);
         while (instr_stack_size()) {
             auto [offset, current_stack_height, current_proc] = pop_instr();
 
@@ -284,7 +284,7 @@ private:
     }
 
 public:
-    Verifier(bytefile* bytefile, auint *st) : bf(bytefile), stack(st), code(bf->code_ptr),
+    Verifier(size_t enter, bytefile* bytefile, auint *st) : enter_pt(enter), bf(bytefile), stack(st), code(bf->code_ptr),
                                    global_area_size(bf->global_area_size),
                                    stringtab_size(bf->stringtab_size) {
         stack_heights.fill(NO_STACK_HEIGHT_VAL);
@@ -298,7 +298,7 @@ public:
     }
 };
 
-void verify_bytecode(auint *stack, bytefile *bf) {
-    Verifier verifier(bf, stack);
+void verify_bytecode(size_t enter_pt, auint *stack, bytefile *bf) {
+    Verifier verifier(enter_pt, bf, stack);
     verifier.verify();
 }

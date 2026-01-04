@@ -871,6 +871,16 @@ int main(int argc, char* argv[])
     bytefile f;
     auto *bf = read_file(argv[1], &f);
 
+    size_t enter_pt = -1;
+    // Looking for `main` public symbol
+    for (int i = 0; i < bf->public_symbols_number; i++) {
+        if (!strcmp("main", get_public_name(bf, i))) {
+            enter_pt = bf->public_ptr[i * 2 + 1]; // index for code_ptr
+            break;
+        }
+    }
+    check(enter_pt != -1, "No `main` point in program. Offset: 0x%x\n", 0);
+
     VMState vm;
     vm.bf = bf;
     vm.ip = 0;
@@ -880,7 +890,7 @@ int main(int argc, char* argv[])
     vm.fname = argv[1];
     vm.frames_top = 0;
 
-    verify_bytecode(vm.stack, bf);
+    verify_bytecode(enter_pt, vm.stack, bf);
     interpret(vm, bf, argv[1]);
     __shutdown();
     return 0;
