@@ -51,54 +51,39 @@ private:
         return disassemble_instruction(bf, start, stdin);
     }
 
-    void push_proc(int32_t proc_start_offset, int32_t proc_max_stack_sz) {
-        *procedures_stack_ptr = proc_start_offset;
-        *(procedures_stack_ptr + 1) = proc_max_stack_sz;
-        procedures_stack_ptr += 2;
-        proc_num++;
+    void push(int32_t val) {
+        *(procedures_stack_ptr++) = val;
     }
-    // (procedure start offset, max stack size)
-    std::pair<int32_t, int32_t> pop_proc() {
-        auto offset = *(procedures_stack_ptr - 2);
-        auto stack_sz = *(procedures_stack_ptr - 1);
-        procedures_stack_ptr -= 2;
-        proc_num--;
-        return std::make_pair(offset, stack_sz);
+    int32_t pop() {
+        auto res = *(procedures_stack_ptr-1);
+        procedures_stack_ptr--;
+        return res;
     }
-    std::pair<int32_t, int32_t> peek_proc(int32_t offset = 0) {
-        auto start_offset = *(procedures_stack_ptr - 2 - 2*offset);
-        auto stack_sz = *(procedures_stack_ptr - 1 - 2*offset);
-        return std::make_pair(start_offset, stack_sz);
+    int32_t peek() {
+        return *(procedures_stack_ptr-1);
     }
-    int32_t proc_stack_size() {
-        return (procedures_stack_ptr - stack) / 2;
+    int32_t stack_size() {
+        return (procedures_stack_ptr - stack);
     }
-
-    void push_instr(int32_t offset, int32_t proc) {
-        *(instructions_stack_ptr++) = offset;
-        *(instructions_stack_ptr++) = proc;
-    }
-    // (offset, procedure)
-    std::tuple<int32_t, int32_t> pop_instr() {
-        instructions_stack_ptr--;
-        auto proc = *(instructions_stack_ptr--);    
-        auto offset = *(instructions_stack_ptr);
-        return std::make_tuple(offset, proc);
-    }
-    std::tuple<int32_t, int32_t> peek_instr(int32_t offset = 0) {
-        auto instr_offset = *(instructions_stack_ptr - 2 - 2*offset);
-        auto proc = *(instructions_stack_ptr - 1 - 2*offset);
-        return std::make_tuple(instr_offset, proc);
-    }
-    int32_t instr_stack_size() {
-        return ((instructions_stack_ptr - stack) - PROC_STACK_MAP)/2;
+    bool guard_next() {
+        return *(procedures_stack_ptr-1) == STACK_MAP_GUARD;
     }
 
     void traverse() {
+        auint current_max_proc_stack = 0;
         int32_t current_stack_height = 0;
-        push_instr(enter_pt, proc_num);
-        while (instr_stack_size()) {
-            auto [offset, current_proc] = pop_instr();
+        int32_t start_offset = enter_pt;
+        push(enter_pt);
+        while (stack_size()) {
+            auto offset = pop();
+            if (offset == STACK_MAP_GUARD) {
+                current_max_proc_stack = pop(); // current_max_proc_stack
+                start_offset = pop(); // start_offset
+                proc_num--;
+                if (proc_num > 0)
+                    printf("fadfadsfaqsdfas");
+                continue;
+            }
 
             uint8_t opcode = static_cast<uint8_t>(code[offset]);
             int32_t length = instr_length(offset);
@@ -114,10 +99,10 @@ private:
 
             // Skip already visited instructions
             if (stack_heights[offset] > NO_STACK_HEIGHT_VAL) {
-                if (!instr_stack_size())
+                if (!stack_size() || guard_next())
                     continue;
 
-                auto [next_instr, next_proc] = peek_instr();
+                auto next_instr = peek();
                 // We need to set up next instruction
                 current_stack_height = stack_heights[next_instr];
                 check(stack_heights[next_instr] != NO_STACK_HEIGHT_VAL, "ill-formed control-flow. Offset: 0x%x\n", next_instr);
@@ -126,24 +111,24 @@ private:
                 continue;
             }
             stack_heights[offset] = current_stack_height;
-            if (proc_stack_size())
-                *(procedures_stack_ptr - 1) = std::max(current_stack_height > 0 ? static_cast<auint>(current_stack_height) : 0, *(procedures_stack_ptr - 1));
+            current_max_proc_stack = std::max(current_stack_height > 0 ? static_cast<auint>(current_stack_height) : 0, current_max_proc_stack);
 
-            if (opcode == Bytecode::BEGIN || opcode == Bytecode::CBEGIN)
-                push_proc(offset, current_stack_height);
-
-            check(proc_stack_size(), "ill-formed procedure: no BEGIN/CBEGIN. Offset: 0x%x\n", offset);
-            auto [proc_start, proc_max_stack_size] = peek_proc();
+            if (opcode == Bytecode::BEGIN || opcode == Bytecode::CBEGIN) {
+                push(offset);
+                push(current_max_proc_stack);
+                push(STACK_MAP_GUARD);
+                proc_num++;
+            }
+            check(proc_num, "ill-formed procedure: no BEGIN/CBEGIN. Offset: 0x%x\n", offset);
 
             if (opcode == Bytecode::JMP || opcode == Bytecode::CJMPZ || opcode == Bytecode::CJMPNZ) {
                 int32_t target = read_int32(code, offset + 1);
                 check(target >= 0 && target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
-                if (stack_heights[target] != NO_STACK_HEIGHT_VAL)
+                if (stack_heights[target] != NO_STACK_HEIGHT_VAL) {
                     check(stack_heights[offset] == current_stack_height, "stack height mismatch at merge point. Offset: 0x%x\n", offset);
-                else if (stack_heights[target] > NO_STACK_HEIGHT_VAL) {
-                    // if stack_heights[offset] < NO_STACK_HEIGHT_VAL we'll traverse it later anyway
+                } else {
                     stack_heights[target] = (-1) * current_stack_height - 2;
-                    push_instr(target, proc_num);
+                    push(target);
                 }
 
                 // Unconditional jump have single successor
@@ -151,25 +136,29 @@ private:
                     continue;
             }
 
-            verify_instruction(proc_start, offset, opcode);
+            verify_instruction(start_offset, offset, opcode);
 
             if (opcode == Bytecode::END || opcode == Bytecode::RET || opcode == Bytecode::FAIL) {
                 // Check whether we need to dispose of current procedure or not
                 // If workset contains current procedure instructions, don't pop from proc_stack
-                if (instr_stack_size() > 1 && std::get<1>(peek_instr(1)) != current_proc)
-                    pop_proc();
+                if (peek() == STACK_MAP_GUARD) {
+                    pop(); // GUARD
+                    pop(); // current_max_proc_stack
+                    pop(); // start_offset
+                    proc_num--;
+                }
 
-                // Use higher half-word from BEGIN/CBEGIN's local_count to save proc_max_stack_size
-                int32_t arg_count_offset = proc_start + /*BEGIN/CBEGIN instruction size =*/1;
+                // Use higher half-word from BEGIN/CBEGIN's local_count to save current_max_proc_stack
+                int32_t arg_count_offset = start_offset + /*BEGIN/CBEGIN instruction size =*/1;
                 int32_t local_count_offset = arg_count_offset + sizeof(int32_t);
                 int32_t local_count = read_int32(code, local_count_offset);
 
-                int32_t new_local_count_value = (proc_max_stack_size << 16) | (local_count & 0xFFFF);
+                int32_t new_local_count_value = (current_max_proc_stack << 16) | (local_count & 0xFFFF);
                 std::memcpy(code + local_count_offset, &new_local_count_value, sizeof(int32_t));
-                if (!instr_stack_size())
+                if (!stack_size() || guard_next())
                     continue;
 
-                auto [next_instr, next_proc] = peek_instr();
+                auto next_instr = peek();
                 // We need to set up next instruction
                 current_stack_height = stack_heights[next_instr];
                 if (stack_heights[next_instr] > NO_STACK_HEIGHT_VAL) // stack_heights[next_instr] == NO_STACK_HEIGHT_VAL isn't valid scenario
@@ -178,7 +167,7 @@ private:
             }
 
             auto next_offset = offset + length;
-            push_instr(next_offset, proc_num);
+            push(next_offset);
         }
     }
 
