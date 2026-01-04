@@ -28,7 +28,7 @@ Results for Sort.lama test:
 | Recursive source-level interpreter               | 6.17 |
 | Recursive bytecode interpreter                   | 2.22 |
 | Iterative bytecode interpreter (no verifier)     | 7.92 |
-| Iterative bytecode interpreter (with verifier)   | 6.59 |
+| Iterative bytecode interpreter (with verifier)   | 6.79 |
 
 Run performance tests yourself:
 ```bash
