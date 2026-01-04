@@ -257,8 +257,6 @@ private:
                 for (int i = 0; i < n; i++) {
                     int8_t type = read_int8(code, type_offset);
                     int32_t addr = read_int32(code, incr_offset + sizeof(int8_t));
-                    check(type >= 0 && type <= 3, "CLOSURE: invalid varspec type. Offset: 0x%x\n", offset);
-
                     switch (type) {
                         case G:
                             check(addr >= 0 && addr < global_area_size, "CLOSURE: global index out of bounds. Offset: 0x%x\n", offset);
