@@ -110,9 +110,9 @@ private:
             check(offset + length <= code_size, "len overflows code_size", offset);
 
             auto stack_effect = get_stack_effect(code, offset);
-            check(current_stack_height >= stack_effect.first, "stack underflow. Offset: 0x%x\n", offset);
             current_stack_height += (stack_effect.second - stack_effect.first);
-            check(current_stack_height <= MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", offset);
+            check(current_stack_height >= 0, "stack underflow. Offset: 0x%x\n", offset);
+            check(current_stack_height < MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", offset);
 
             // Skip already visited instructions
             if (stack_heights[offset] != NO_STACK_HEIGHT_VAL) {
