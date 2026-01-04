@@ -43,22 +43,8 @@ private:
     int32_t global_area_size;
     int32_t stringtab_size;
 
-    struct BasicBlock {
-        int32_t start_offset;
-        int32_t end_offset;
-        std::array<int32_t, MAX_BB_SUCCESSORS> successors;
-    };
-    struct ProcedureInfo {
-        int32_t start_offset;
-        bool is_closure;
-        int32_t arg_count;
-        int32_t local_count;
-        BasicBlock head_bb;
-    };
-
     size_t proc_num = 0;
     std::array<int32_t, MAX_FILE_SIZE> stack_heights;
-    std::array<bool, MAX_FILE_SIZE> jump_targets;
 
     size_t instr_length(size_t start) {
         return disassemble_instruction(bf, start, stdin);
@@ -124,7 +110,10 @@ private:
             check(offset + length <= code_size, "len overflows code_size", offset);
 
             auto stack_effect = get_stack_effect(code, offset);
+            check(current_stack_height >= stack_effect.first, "stack underflow. Offset: 0x%x\n", offset);
             current_stack_height += (stack_effect.second - stack_effect.first);
+            check(current_stack_height <= MAX_STACK_SIZE, "stack overflow. Offset: 0x%x\n", offset);
+
             // Skip already visited instructions
             if (stack_heights[offset] != NO_STACK_HEIGHT_VAL) {
                 check(stack_heights[offset] == current_stack_height, "stack height mismatch at merge point. Offset: 0x%x\n", offset);
@@ -132,16 +121,17 @@ private:
             }
             stack_heights[offset] = current_stack_height;
             if (proc_stack_size())
-                *procedures_stack_ptr = std::max(static_cast<auint>(current_stack_height), *procedures_stack_ptr);
-            // TODO: check stack over- and underflow
-            // TODO: verify_instruction here
+                *(procedures_stack_ptr - 1) = std::max(current_stack_height > 0 ? static_cast<auint>(current_stack_height) : 0, *(procedures_stack_ptr - 1));
 
             if (opcode == Bytecode::BEGIN || opcode == Bytecode::CBEGIN)
                 push_proc(offset, current_stack_height);
 
+            check(proc_stack_size(), "ill-formed procedure: no BEGIN/CBEGIN. Offset: 0x%x\n", offset);
+            auto [proc_start, proc_max_stack_size] = peek_proc();
+
             if (opcode == Bytecode::JMP || opcode == Bytecode::CJMPZ || opcode == Bytecode::CJMPNZ) {
                 int32_t target = read_int32(code, offset + 1);
-                check(target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
+                check(target >= 0 && target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
                 push_instr(target, current_stack_height, proc_num);
 
                 // Unconditional jump have single successor
@@ -149,8 +139,9 @@ private:
                     continue;
             }
 
+            verify_instruction(proc_start, offset, opcode);
+
             if (opcode == Bytecode::END || opcode == Bytecode::RET || opcode == Bytecode::FAIL) {
-                auto [proc_start, proc_max_stack_size] = peek_proc();
                 // Check whether we need to dispose of current procedure or not
                 // If workset contains current procedure instructions, don't pop from proc_stack
                 if (instr_stack_size() > 1 && std::get<2>(peek_instr(1)) != current_proc)
@@ -171,128 +162,125 @@ private:
         }
     }
 
-    void verify_instructions(const ProcedureInfo& proc) {
-        std::vector<BasicBlock> workset;
-        workset.push_back(proc.head_bb);
-        while (!workset.empty()) {
-            BasicBlock bb = workset.back();
-            workset.pop_back();
-            int32_t offset = bb.start_offset;
-            uint8_t opcode = static_cast<uint8_t>(code[offset]);
-            auto incr_offset = offset + 1;
-            check(is_valid_opcode(opcode), "unknown instruction. Offset: 0x%x\n", offset);
+    void verify_instruction(int32_t current_proc_start_offset, int32_t offset, uint8_t opcode) {
+        auto incr_offset = offset + 1;
+        check(is_valid_opcode(opcode), "unknown instruction. Offset: 0x%x\n", offset);
+        switch(opcode) {
+            case Bytecode::CALL: {
+                int32_t target = read_int32(code, incr_offset);
+                int32_t n = read_int32(code, incr_offset + sizeof(int32_t));
+                check(n >= 0, "CALL: negative arguments number. Offset: 0x%x\n", offset);
+                break;
+            }
+            case Bytecode::CALLC: {
+                int32_t n = read_int32(code, incr_offset + sizeof(int32_t));
+                check(n >= 0, "CALLC: negative arguments number. Offset: 0x%x\n", offset);
+                break;
+            }
+            // Jumps should already be verified in `traverse`
 
-            switch(opcode) {
-                // Jumps/calls
-                case Bytecode::JMP:
-                case Bytecode::CJMPZ:
-                case Bytecode::CJMPNZ: {
-                    int32_t target = read_int32(code, incr_offset);
-                    check(target >= 0 && target < code_size, "jump target out of bounds. Offset: 0x%x\n", offset);
-                    // Target should be valid instruction. We can do it via `jump_targets`
-                    check(jump_targets[target], "jump target not at instruction boundary. Offset: 0x%x\n", offset);
-                }
-                case Bytecode::CALL: {
-                    int32_t target = read_int32(code, incr_offset);
-                    check(target >= 0 && target < code_size, "call target out of bounds. Offset: 0x%x\n", offset);
-                    // Target should be valid instruction. We can do it via `jump_targets`
-                    check(jump_targets[target], "call target not at instruction boundary. Offset: 0x%x\n", offset);
+            // Global indexes
+            case Bytecode::LD_GLOBAL:
+            case Bytecode::LDA_GLOBAL:
+            case Bytecode::ST_GLOBAL: {
+                int32_t index = read_int32(code, incr_offset);
+                check(index >= 0 && index < global_area_size, "global index out of bounds. Offset: 0x%x\n", offset);
+                break;
+            }
+            // Local indexes
+            case Bytecode::LD_LOCAL:
+            case Bytecode::LDA_LOCAL:
+            case Bytecode::ST_LOCAL: {
+                int32_t index = read_int32(code, incr_offset);
+                int32_t local_count = read_int32(code, current_proc_start_offset + /*BEGIN/CBEGIN instruction length=*/1 + sizeof(int32_t));
+                check(index >= 0 && index < local_count, "local index out of bounds. Offset: 0x%x\n", offset);
+                break;
+            }
+            // Argument indexes
+            case Bytecode::LD_ARGUMENT:
+            case Bytecode::LDA_ARGUMENT:
+            case Bytecode::ST_ARGUMENT: {
+                int32_t index = read_int32(code, incr_offset);
+                int32_t arg_count = read_int32(code, current_proc_start_offset + /*BEGIN/CBEGIN instruction length=*/1);
+                check(index >= 0 && index < arg_count, "argument index out of bounds. Offset: 0x%x\n", offset);
+                break;
+            }
 
-                    int32_t n = read_int32(code, incr_offset + sizeof(int32_t));
-                    check(n >= 0, "CALL: negative arguments number. Offset: 0x%x\n", offset);
-                }
-                case Bytecode::CALLC: {
-                    int32_t n = read_int32(code, incr_offset + sizeof(int32_t));
-                    check(n >= 0, "CALLC: negative arguments number. Offset: 0x%x\n", offset);
-                }
+            // String indexes
+            case Bytecode::STRING: {
+                int32_t str_index = read_int32(code, incr_offset);
+                check(str_index >= 0 && str_index < stringtab_size, "string index out of bounds. Offset: 0x%x\n", offset);
+                break;
+            }
 
-                // Global indexes
-                case Bytecode::LD_GLOBAL:
-                case Bytecode::LDA_GLOBAL:
-                case Bytecode::ST_GLOBAL: {
-                    int32_t index = read_int32(code, incr_offset);
-                    check(index >= 0 && index < global_area_size, "global index out of bounds. Offset: 0x%x\n", offset);
-                }
-                // Local indexes
-                case Bytecode::LD_LOCAL:
-                case Bytecode::LDA_LOCAL:
-                case Bytecode::ST_LOCAL: {
-                    int32_t index = read_int32(code, incr_offset);
-                    check(index >= 0 && index < proc.local_count, "local index out of bounds. Offset: 0x%x\n", offset);
-                }
-                // Argument indexes
-                case Bytecode::LD_ARGUMENT:
-                case Bytecode::LDA_ARGUMENT:
-                case Bytecode::ST_ARGUMENT: {
-                    int32_t index = read_int32(code, incr_offset);
-                    check(index >= 0 && index < proc.arg_count, "argument index out of bounds. Offset: 0x%x\n", offset);
-                }
+            case Bytecode::SEXP: {
+                int32_t tag_index = read_int32(code, incr_offset);
+                check(tag_index >= 0 && tag_index < stringtab_size, "SEXP: tag index out of bounds. Offset: 0x%x\n", offset);
+                int32_t elem_count = read_int32(code, incr_offset + sizeof(int32_t));
+                check(elem_count >= 0, "SEXP: negative element count. Offset: 0x%x\n", offset);
+                break;
+            }
 
-                // String indexes
-                case Bytecode::STRING: {
-                    int32_t str_index = read_int32(code, incr_offset);
-                    check(str_index >= 0 && str_index < stringtab_size, "string index out of bounds. Offset: 0x%x\n", offset);
-                }
+            case Bytecode::TAG: {
+                int32_t tag_index = read_int32(code, incr_offset);
+                check(tag_index >= 0 && tag_index < bf->stringtab_size, "TAG: string index out of bounds. Offset: 0x%x\n", offset);
+                int32_t expected_elem_count = read_int32(code, incr_offset + sizeof(int32_t));
+                check(expected_elem_count >= 0, "TAG: negative element count. Offset: 0x%x\n", offset);
+                break;
+            }
 
-                case Bytecode::SEXP: {
-                    int32_t tag_index = read_int32(code, incr_offset);
-                    check(tag_index >= 0 && tag_index < stringtab_size, "SEXP: tag index out of bounds. Offset: 0x%x\n", offset);
-                    int32_t elem_count = read_int32(code, incr_offset + sizeof(int32_t));
-                    check(elem_count >= 0, "SEXP: negative element count. Offset: 0x%x\n", offset);
-                }
+            case Bytecode::CALL_BARRAY: {
+                int32_t n = read_int32(code, incr_offset);
+                check(n >= 0, "BARRAY: negative arguments number. Offset: 0x%x\n", offset);
+                break;
+            }
 
-                case Bytecode::TAG: {
-                    int32_t tag_index = read_int32(code, incr_offset);
-                    check(tag_index >= 0 && tag_index < bf->stringtab_size, "TAG: string index out of bounds. Offset: 0x%x\n", offset);
-                    int32_t expected_elem_count = read_int32(code, incr_offset + sizeof(int32_t));
-                    check(expected_elem_count >= 0, "TAG: negative element count. Offset: 0x%x\n", offset);
-                }
+            case Bytecode::CONST:
+            case Bytecode::ARRAY:
+            case Bytecode::LINE: { // Check only out-of-bounds read
+                read_int32(code, incr_offset);
+                break;
+            }
+            case Bytecode::FAIL: { // Check only out-of-bounds reads
+                read_int32(code, incr_offset);
+                read_int32(code, incr_offset + sizeof(int32_t));
+                break;
+            }
 
-                case Bytecode::CALL_BARRAY: {
-                    int32_t n = read_int32(code, incr_offset);
-                    check(n >= 0, "BARRAY: negative arguments number. Offset: 0x%x\n", offset);
-                }
+            case Bytecode::CLOSURE: {
+                int32_t target = read_int32(code, incr_offset);
+                check(target >= 0 && target <= code_size, "CLOSURE: invalid target address. Offset: 0x%x\n", offset);
+                int32_t n = read_int32(code, incr_offset + sizeof(int32_t));
+                check(n >= 0, "CLOSURE: negative capture count. Offset: 0x%x\n", offset);
 
-                case Bytecode::CONST:
-                case Bytecode::ARRAY:
-                case Bytecode::LINE: { // Check only out-of-bounds read
-                    read_int32(code, incr_offset);
-                }
-                case Bytecode::FAIL: { // Check only out-of-bounds reads
-                    read_int32(code, incr_offset);
-                    read_int32(code, incr_offset + sizeof(int32_t));
-                }
+                auto type_offset = incr_offset + sizeof(int32_t) + sizeof(int32_t);
+                for (int i = 0; i < n; i++) {
+                    int8_t type = read_int8(code, type_offset);
+                    int32_t addr = read_int32(code, incr_offset + sizeof(int8_t));
+                    check(type >= 0 && type <= 3, "CLOSURE: invalid varspec type. Offset: 0x%x\n", offset);
 
-                case Bytecode::CLOSURE: {
-                    int32_t target = read_int32(code, incr_offset);
-                    check(target >= 0 && target <= code_size, "CLOSURE: invalid target address. Offset: 0x%x\n", offset);
-                    int32_t n = read_int32(code, incr_offset + sizeof(int32_t));
-                    check(n >= 0, "CLOSURE: negative capture count. Offset: 0x%x\n", offset);
-
-                    auto type_offset = incr_offset + sizeof(int32_t) + sizeof(int32_t);
-                    for (int i = 0; i < n; i++) {
-                        int8_t type = read_int8(code, type_offset);
-                        int32_t addr = read_int32(code, incr_offset + sizeof(int8_t));
-                        check(type >= 0 && type <= 3, "CLOSURE: invalid varspec type. Offset: 0x%x\n", offset);
-
-                        switch (type) {
-                            case G:
-                                check(addr >= 0 && addr < global_area_size, "CLOSURE: global index out of bounds. Offset: 0x%x\n", offset);
-                                break;
-                            case L:
-                                check(addr >= 0 && addr < proc.local_count, "CLOSURE: local index out of bounds. Offset: 0x%x\n", offset);
-                                break;
-                            case A:
-                                check(addr >= 0 && addr < proc.arg_count, "CLOSURE: argument index out of bounds. Offset: 0x%x\n", offset);
-                                break;
-                            case C:
-                                // Can't check captured statically
-                                break;
-                            default:
-                                check(false, "invalid varspec for CLOSURE. Offset: 0x%x\n", offset);
+                    switch (type) {
+                        case G:
+                            check(addr >= 0 && addr < global_area_size, "CLOSURE: global index out of bounds. Offset: 0x%x\n", offset);
+                            break;
+                        case L: {
+                            int32_t local_count = read_int32(code, current_proc_start_offset + /*BEGIN/CBEGIN instruction length=*/1 + sizeof(int32_t));
+                            check(addr >= 0 && addr < local_count, "CLOSURE: local index out of bounds. Offset: 0x%x\n", offset);
+                            break;
                         }
+                        case A: {
+                            int32_t arg_count = read_int32(code, current_proc_start_offset + /*BEGIN/CBEGIN instruction length=*/1);
+                            check(addr >= 0 && addr < arg_count, "CLOSURE: argument index out of bounds. Offset: 0x%x\n", offset);
+                            break;
+                        }
+                        case C:
+                            // Can't check captured statically
+                            break;
+                        default:
+                            check(false, "invalid varspec for CLOSURE. Offset: 0x%x\n", offset);
                     }
                 }
+                break;
             }
         }
     }
