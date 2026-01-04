@@ -149,13 +149,19 @@ private:
                 if (opcode == Bytecode::JMP)
                     continue;
             }
+            if (opcode == Bytecode::CALL) {
+                int32_t target = read_int32(code, offset + 1);
+                check(target >= 0 && target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
+                stack_heights[target] = (-1) * current_stack_height - 2;
+                push_instr(target, proc_num);
+            }
 
             verify_instruction(proc_start, offset, opcode);
 
             if (opcode == Bytecode::END || opcode == Bytecode::RET || opcode == Bytecode::FAIL) {
                 // Check whether we need to dispose of current procedure or not
                 // If workset contains current procedure instructions, don't pop from proc_stack
-                if (instr_stack_size() > 1 && std::get<1>(peek_instr(1)) != current_proc)
+                if (instr_stack_size() > 1 && (std::get<1>(peek_instr()) != current_proc && std::get<1>(peek_instr(1)) != current_proc))
                     pop_proc();
 
                 // Use higher half-word from BEGIN/CBEGIN's local_count to save proc_max_stack_size
@@ -275,7 +281,8 @@ private:
                 auto type_offset = incr_offset + sizeof(int32_t) + sizeof(int32_t);
                 for (int i = 0; i < n; i++) {
                     int8_t type = read_int8(code, type_offset);
-                    int32_t addr = read_int32(code, incr_offset + sizeof(int8_t));
+                    int32_t addr = read_int32(code, type_offset + sizeof(int8_t));
+                    type_offset += (sizeof(int32_t) + sizeof(int8_t));
                     switch (type) {
                         case G:
                             check(addr >= 0 && addr < global_area_size, "CLOSURE: global index out of bounds. Offset: 0x%x\n", offset);
