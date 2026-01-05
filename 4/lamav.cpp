@@ -19,13 +19,13 @@ struct VMState;
 unsigned disassemble_instruction(const bytefile* bf, unsigned offset, FILE* f);
 
 int32_t read_int32(const char* data, size_t pos) {
-    check(pos + sizeof(int32_t) <= code_size, "reading int32 value beyond buffer bounds. Offset: 0x%x\n", pos);
+    check(pos + sizeof(int32_t) < code_size, "reading int32 value beyond buffer bounds. Offset: 0x%x\n", pos);
     int32_t value;
     std::memcpy(&value, data + pos, sizeof(int32_t));
     return value;
 }
 int8_t read_int8(const char* data, size_t pos) {
-    check(pos + sizeof(int8_t) <= code_size, "reading int8 value beyond buffer bounds. Offset: 0x%x\n", pos);
+    check(pos + sizeof(int8_t) < code_size, "reading int8 value beyond buffer bounds. Offset: 0x%x\n", pos);
     int8_t value;
     std::memcpy(&value, data + pos, sizeof(int8_t));
     return value;
@@ -94,7 +94,7 @@ private:
 
             uint8_t opcode = static_cast<uint8_t>(code[offset]);
             int32_t length = instr_length(offset);
-            check(offset + length <= code_size, "len overflows code_size", offset);
+            check(offset + length < code_size, "len overflows code_size", offset);
 
             if (stack_heights[offset] < NO_STACK_HEIGHT_VAL) // It's a jump target
                 current_stack_height = get_or_remember_height(stack_heights[offset]);
