@@ -59,14 +59,23 @@ private:
         procedures_stack_ptr--;
         return res;
     }
-    int32_t peek() {
-        return *(procedures_stack_ptr-1);
+    int32_t peek(int32_t offset = 0) {
+        return *(procedures_stack_ptr - 1 - offset);
     }
     int32_t stack_size() {
         return (procedures_stack_ptr - stack);
     }
+    int32_t get_or_remember_height(int32_t h) {
+        return (-1) * h - 2; // We need to distinguish this from NO_STACK_HEIGHT_VAL and known (non-negative) stack height
+    }
+    int32_t remember_proc_start_offset(int32_t offset) {
+        return MAX_FILE_SIZE + offset; // We need to distinguish it from regular offsets
+    }
+    int32_t get_remembered_proc_start_offset(int32_t offset) {
+        return offset - MAX_FILE_SIZE; // We need to distinguish it from regular offsets
+    }
     bool guard_next() {
-        return *(procedures_stack_ptr-1) == STACK_MAP_GUARD;
+        return peek() >= MAX_FILE_SIZE;
     }
 
     void traverse() {
@@ -76,9 +85,9 @@ private:
         push(enter_pt);
         while (stack_size()) {
             auto offset = pop();
-            if (offset == STACK_MAP_GUARD) {
+            if (offset >= MAX_FILE_SIZE) {
                 current_max_proc_stack = pop();
-                start_offset = pop();
+                start_offset = get_remembered_proc_start_offset(offset);
                 proc_num--;
                 continue;
             }
@@ -88,7 +97,7 @@ private:
             check(offset + length <= code_size, "len overflows code_size", offset);
 
             if (stack_heights[offset] < NO_STACK_HEIGHT_VAL) // It's a jump target
-                current_stack_height = (-1) * stack_heights[offset] - 2;
+                current_stack_height = get_or_remember_height(stack_heights[offset]);
 
             auto stack_effect = get_stack_effect(code, offset);
             current_stack_height += (stack_effect.second - stack_effect.first);
@@ -105,17 +114,16 @@ private:
                 current_stack_height = stack_heights[next_instr];
                 check(stack_heights[next_instr] != NO_STACK_HEIGHT_VAL, "ill-formed control-flow. Offset: 0x%x\n", next_instr);
                 if (stack_heights[next_instr] > NO_STACK_HEIGHT_VAL) // stack_heights[next_instr] == NO_STACK_HEIGHT_VAL isn't valid scenario
-                    stack_heights[next_instr] = (-1) * current_stack_height - 2;
+                    stack_heights[next_instr] = get_or_remember_height(current_stack_height);
                 continue;
             }
             stack_heights[offset] = current_stack_height;
             current_max_proc_stack = std::max(current_stack_height > 0 ? static_cast<auint>(current_stack_height) : 0, current_max_proc_stack);
 
             if (opcode == Bytecode::BEGIN || opcode == Bytecode::CBEGIN) {
-                push(start_offset);
-                start_offset = offset;
                 push(current_max_proc_stack);
-                push(STACK_MAP_GUARD);
+                push(remember_proc_start_offset(start_offset));
+                start_offset = offset;
                 proc_num++;
             }
             check(proc_num, "ill-formed procedure: no BEGIN/CBEGIN. Offset: 0x%x\n", offset);
@@ -126,7 +134,7 @@ private:
                 if (stack_heights[target] != NO_STACK_HEIGHT_VAL) {
                     check(stack_heights[offset] == current_stack_height, "stack height mismatch at merge point. Offset: 0x%x\n", offset);
                 } else {
-                    stack_heights[target] = (-1) * current_stack_height - 2;
+                    stack_heights[target] = get_or_remember_height(current_stack_height);
                     push(target);
                 }
 
@@ -137,7 +145,7 @@ private:
             if (opcode == Bytecode::CALL) {
                 int32_t target = read_int32(code, offset + 1);
                 check(target >= 0 && target < code_size, "jump/call target out of bounds. Offset: 0x%x\n", offset);
-                stack_heights[target] = (-1) * current_stack_height - 2;
+                stack_heights[target] = get_or_remember_height(current_stack_height);
                 push(target);
             }
 
@@ -146,8 +154,7 @@ private:
             if (opcode == Bytecode::END || opcode == Bytecode::RET || opcode == Bytecode::FAIL) {
                 // Check whether we need to dispose of current procedure or not
                 // If workset contains current procedure instructions, don't pop from proc_stack
-                if (peek() == STACK_MAP_GUARD) {
-                    pop(); // GUARD
+                if (guard_next()) {
                     pop(); // current_max_proc_stack
                     pop(); // start_offset
                     proc_num--;
@@ -167,7 +174,7 @@ private:
                 // We need to set up next instruction
                 current_stack_height = stack_heights[next_instr];
                 if (stack_heights[next_instr] > NO_STACK_HEIGHT_VAL) // stack_heights[next_instr] == NO_STACK_HEIGHT_VAL isn't valid scenario
-                    stack_heights[next_instr] = (-1) * current_stack_height - 2;
+                    stack_heights[next_instr] = get_or_remember_height(current_stack_height);
                 continue;
             }
 
