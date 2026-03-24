@@ -80,3 +80,4 @@ $(PERF_TESTS): %: %.lama
 
 clean:
 	@rm -f language/test/performance/*.bc language/test/regression/*.bc language/test/regression/*.actual.log language/test/regression/*.diff
+	@mvn clean

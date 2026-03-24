@@ -4,6 +4,8 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 PROGRAM_ARGS=()
 JAVA_ARGS=()
+JAVA_ARGS+=("-Xss64m")
+JAVA_ARGS+=("-Xmx8g")
 if [ -d "$JAVA_HOME/lib/graalvm" ]; then
 
     for opt in "$@"
@@ -50,7 +52,5 @@ JAVA_ARGS+=("-XX:+UnlockExperimentalVMOptions")
 JAVA_ARGS+=("-XX:+EnableJVMCI")
 JAVA_ARGS+=("--sun-misc-unsafe-memory-access=allow")
 JAVA_ARGS+=("--enable-preview")
-JAVA_ARGS+=("-Xss8m")
-JAVA_ARGS+=("-Xmx4g")
 
 "$JAVA_HOME/bin/java" "${JAVA_ARGS[@]}" -p "${DIR}/modules" -m org.graalvm.lama.launcher/com.oracle.truffle.lama.launcher.LamaMain "${PROGRAM_ARGS[@]}"

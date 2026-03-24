@@ -1,7 +1,8 @@
 package com.oracle.truffle.lama.nodes.controlflow;
 
+import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.lama.exception.LamaException;
+import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.lama.exception.LamaTypeException;
 import com.oracle.truffle.lama.nodes.expression.LamaExpressionNode;
 import com.oracle.truffle.lama.runtime.LamaFunctionObject;
@@ -12,10 +13,13 @@ public final class LamaCallNode extends LamaExpressionNode {
     private LamaExpressionNode functionNode;
     @Children
     private final LamaExpressionNode[] argumentNodes;
+    @Child
+    private IndirectCallNode callNode; // Indirect call to avoid resources exhaustion
 
     public LamaCallNode(LamaExpressionNode functionNode, List<LamaExpressionNode> args) {
         this.functionNode = functionNode;
         this.argumentNodes = args.toArray(new LamaExpressionNode[0]);
+        this.callNode = Truffle.getRuntime().createIndirectCallNode();
     }
 
     @Override
@@ -32,6 +36,6 @@ public final class LamaCallNode extends LamaExpressionNode {
         for (int i = 0; i < argumentNodes.length; i++) {
             arguments[i + 1] = argumentNodes[i].executeGeneric(frame);
         }
-        return funcObj.callTarget.call(arguments);
+        return callNode.call(funcObj.callTarget, arguments);
     }
 }

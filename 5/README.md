@@ -20,12 +20,19 @@ make regression
 ```
 
 #### Performance tests
-Results for Sort.lama test:
+Results for Sort.lama test (1000 elements):
 | Interpreter | Time |
 | ------------------ | ------- |
 | Recursive source-level interpreter | 5.81 |
 | Recursive bytecode interpreter     | 2.18 |
 | Graal Truffle interpreter (JVM build)     | 2.50 |
+
+Results for Sort.lama test (5000 elements):
+| Interpreter | Time |
+| ------------------ | ------- |
+| Recursive source-level interpreter | 169.45 |
+| Recursive bytecode interpreter     | 53.45 |
+| Graal Truffle interpreter (JVM build)     | 15.37 |
 
 Run performance tests yourself:
 ```bash
