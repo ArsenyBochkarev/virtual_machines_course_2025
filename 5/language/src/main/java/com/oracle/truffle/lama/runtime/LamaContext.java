@@ -47,6 +47,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.TruffleLanguage.ContextReference;
 import com.oracle.truffle.api.TruffleLanguage.Env;
@@ -65,6 +66,7 @@ public final class LamaContext {
         return env.parsePublic(source);
     }
     private static final ContextReference<LamaContext> REFERENCE = ContextReference.create(LamaLanguage.class);
+    @CompilerDirectives.TruffleBoundary
     public static LamaContext get(Node node) {
         return REFERENCE.get(node);
     }
@@ -82,6 +84,7 @@ public final class LamaContext {
     }
 
     private final Map<String, Object> globals = new HashMap<>();
+    @CompilerDirectives.TruffleBoundary
     public Object getGlobal(String name) {
         return globals.get(name);
     }

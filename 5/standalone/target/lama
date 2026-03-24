@@ -6,6 +6,8 @@ PROGRAM_ARGS=()
 JAVA_ARGS=()
 JAVA_ARGS+=("-Xss64m")
 JAVA_ARGS+=("-Xmx8g")
+#JAVA_ARGS+=("-XX:+UnlockExperimentalVMOptions" "-Dgraal.MaximumGraalGraphSize=200000")
+#JAVA_ARGS+=("-Dpolyglot.engine.TraceInlining=true")
 if [ -d "$JAVA_HOME/lib/graalvm" ]; then
 
     for opt in "$@"

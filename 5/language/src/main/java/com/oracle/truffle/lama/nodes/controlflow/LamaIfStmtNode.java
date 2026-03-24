@@ -1,6 +1,8 @@
 package com.oracle.truffle.lama.nodes.controlflow;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.lama.exception.LamaException;
 import com.oracle.truffle.lama.exception.LamaTypeException;
 import com.oracle.truffle.lama.nodes.expression.LamaExpressionNode;
@@ -31,6 +33,7 @@ public final class LamaIfStmtNode extends LamaExpressionNode {
     }
 
     @Override
+    @ExplodeLoop
     public Object executeGeneric(VirtualFrame frame) {
         if (isTrue(conditionNode.executeGeneric(frame))) {
             return thenNode.executeGeneric(frame);
@@ -46,6 +49,7 @@ public final class LamaIfStmtNode extends LamaExpressionNode {
         return null; // No branch was accessed
     }
 
+    @CompilerDirectives.TruffleBoundary
     private static boolean isTrue(Object value) {
         if (value instanceof Long) {
             return (Long) value != 0;

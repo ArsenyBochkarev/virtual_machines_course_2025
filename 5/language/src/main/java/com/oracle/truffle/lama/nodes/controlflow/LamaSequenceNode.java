@@ -1,6 +1,7 @@
 package com.oracle.truffle.lama.nodes.controlflow;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.lama.nodes.expression.LamaExpressionNode;
 
 public final class LamaSequenceNode extends LamaExpressionNode {
@@ -12,6 +13,7 @@ public final class LamaSequenceNode extends LamaExpressionNode {
     }
 
     @Override
+    @ExplodeLoop
     public Object executeGeneric(VirtualFrame frame) {
         Object result = null;
         for (LamaExpressionNode expr : expressions) {

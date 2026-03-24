@@ -1,6 +1,8 @@
 package com.oracle.truffle.lama.nodes.pattern;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.lama.runtime.LamaSExp;
 
 public class LamaSExpPatternNode extends LamaPatternNode {
@@ -14,12 +16,11 @@ public class LamaSExpPatternNode extends LamaPatternNode {
     }
 
     @Override
+    @ExplodeLoop
     public boolean executeMatch(VirtualFrame frame, Object value) {
         if (!(value instanceof LamaSExp sexpr)) return false;
 
-        if (!expectedTag.equals(sexpr.constructor()))
-            return false;
-        if (args.length != sexpr.arguments().length)
+        if (!check(sexpr))
             return false;
 
         for (int i = 0; i < args.length; i++) {
@@ -27,5 +28,12 @@ public class LamaSExpPatternNode extends LamaPatternNode {
                 return false;
         }
         return true;
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    public boolean check(LamaSExp sexpr) {
+        if (!expectedTag.equals(sexpr.constructor()))
+            return false;
+        return args.length == sexpr.arguments().length;
     }
 }

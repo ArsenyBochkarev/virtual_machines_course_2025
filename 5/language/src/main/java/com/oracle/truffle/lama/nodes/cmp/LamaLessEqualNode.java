@@ -1,5 +1,6 @@
 package com.oracle.truffle.lama.nodes.cmp;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.lama.exception.LamaException;
 import com.oracle.truffle.lama.nodes.expression.LamaExpressionNode;
@@ -19,9 +20,14 @@ public final class LamaLessEqualNode extends LamaExpressionNode {
     public Object executeGeneric(VirtualFrame frame) {
         Object leftVal = left.executeGeneric(frame);
         Object rightVal = right.executeGeneric(frame);
-        if (leftVal instanceof Long && rightVal instanceof Long) {
-            return (long) leftVal <= (long) rightVal ? 1L : 0L;
+        if (leftVal instanceof Long lv && rightVal instanceof Long rv) {
+            return calculateRes(lv, rv);
         }
         throw new LamaException("Type error in comparison", this);
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    public Object calculateRes(Long leftVal, Long rightVal) {
+        return leftVal <= rightVal ? 1L : 0L;
     }
 }

@@ -1,5 +1,6 @@
 package com.oracle.truffle.lama.runtime;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.library.ExportLibrary;
@@ -16,10 +17,12 @@ public final class LamaArray implements TruffleObject {
         this.elements = elements;
     }
 
+    @CompilerDirectives.TruffleBoundary
     public int length() {
         return elements.length;
     }
 
+    @CompilerDirectives.TruffleBoundary
     public Object get(int index) {
         return elements[index];
     }

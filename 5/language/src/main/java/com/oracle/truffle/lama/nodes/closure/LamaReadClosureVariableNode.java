@@ -2,6 +2,7 @@ package com.oracle.truffle.lama.nodes.closure;
 
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.lama.nodes.expression.LamaExpressionNode;
 
 public class LamaReadClosureVariableNode extends LamaExpressionNode {
@@ -21,6 +22,7 @@ public class LamaReadClosureVariableNode extends LamaExpressionNode {
     }
 
     @Override
+    @ExplodeLoop
     public Object executeGeneric(VirtualFrame frame) {
         // 0-indexed argument is a parent frame
         MaterializedFrame current = (MaterializedFrame) frame.getArguments()[0];

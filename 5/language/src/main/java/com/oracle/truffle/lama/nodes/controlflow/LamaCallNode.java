@@ -2,6 +2,7 @@ package com.oracle.truffle.lama.nodes.controlflow;
 
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.lama.exception.LamaTypeException;
 import com.oracle.truffle.lama.nodes.expression.LamaExpressionNode;
@@ -23,6 +24,7 @@ public final class LamaCallNode extends LamaExpressionNode {
     }
 
     @Override
+    @ExplodeLoop
     public Object executeGeneric(VirtualFrame frame) {
         Object function = functionNode.executeGeneric(frame);
         if (!(function instanceof LamaFunctionObject funcObj)) {

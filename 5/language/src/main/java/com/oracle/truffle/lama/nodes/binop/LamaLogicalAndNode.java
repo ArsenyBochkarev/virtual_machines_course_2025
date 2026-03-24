@@ -1,5 +1,6 @@
 package com.oracle.truffle.lama.nodes.binop;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.lama.exception.LamaException;
@@ -25,6 +26,7 @@ public class LamaLogicalAndNode extends LamaExpressionNode {
         return 0L;
     }
 
+    @CompilerDirectives.TruffleBoundary
     private static boolean isTrue(Object value) {
         if (value instanceof Long) {
             return (Long) value != 0;
