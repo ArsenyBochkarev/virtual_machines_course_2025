@@ -23,16 +23,16 @@ make regression
 Results for Sort.lama test (1000 elements):
 | Interpreter | Time |
 | ------------------ | ------- |
-| Recursive source-level interpreter | 5.81 |
+| Recursive source-level interpreter | 5.89 |
 | Recursive bytecode interpreter     | 2.18 |
-| Graal Truffle interpreter (JVM build)     | 2.50 |
+| Graal Truffle interpreter (JVM build)     | 2.58 |
 
 Results for Sort.lama test (5000 elements):
 | Interpreter | Time |
 | ------------------ | ------- |
-| Recursive source-level interpreter | 169.45 |
-| Recursive bytecode interpreter     | 53.45 |
-| Graal Truffle interpreter (JVM build)     | 15.37 |
+| Recursive source-level interpreter | 172.24 |
+| Recursive bytecode interpreter     | 53.01 |
+| Graal Truffle interpreter (JVM build)     | 7.82 |
 
 Run performance tests yourself:
 ```bash
