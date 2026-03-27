@@ -11,12 +11,17 @@ make test
 ```
 
 #### Results
+
 ##### Standard Allocator
 ```
-TBD
+Time used: 169856 usec
+Memory used: 320512000 bytes
+Overhead: 50.1%
 ```
 
 ##### Downward Sequential Pool
 ```
-TBD
+Time used: 3847 usec
+Memory used: 160497664 bytes
+Overhead:  0.3%
 ```
