@@ -18,13 +18,12 @@
 
 
 constexpr int MAX_POOLS = 128;
-
-extern std::atomic<LockFreePool *> active_lock_free_pools[MAX_POOLS];
-extern std::atomic<int> lock_free_pool_count;
-
-extern std::atomic<Pool *> active_pools[MAX_POOLS];
-extern std::atomic<int> pool_count;
-
-void register_sigsegv_handler();
+class PoolRegistry {
+public:
+    static inline std::atomic<BasePool *> active_pools[MAX_POOLS];
+    static void register_pool(BasePool *p);
+    static void unregister_pool(BasePool *p);
+    static void register_sigsegv_handler();
+};
 
 #endif // SIGSEGV_HANDLER_HPP

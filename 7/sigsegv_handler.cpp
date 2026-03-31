@@ -1,44 +1,32 @@
 #include "sigsegv_handler.hpp"
+#include "pools.hpp"
 
-
-std::atomic<LockFreePool *> active_lock_free_pools[MAX_POOLS];
-std::atomic<int> lock_free_pool_count{0};
-
-std::atomic<Pool *> active_pools[MAX_POOLS];
-std::atomic<int> pool_count{0};
 
 static struct sigaction prev_handler;
 static bool handler_registered = false;
 
 static void sigsegv_handler(int sig, siginfo_t *info, void *ucontext) {
     char *mem_hit = static_cast<char *>(info->si_addr);
-    const char *faulted_pool_name = nullptr;
+    int pool_id = -1;
 
-    int count = lock_free_pool_count.load(std::memory_order_acquire);
-    for (int i = 0; i < count; ++i) {
-        LockFreePool *p = active_lock_free_pools[i].load(std::memory_order_acquire);
+    for (int i = 0; i < MAX_POOLS; ++i) {
+        BasePool *p = PoolRegistry::active_pools[i].load(std::memory_order_acquire);
         if (p && p->is_in_guard_zone(mem_hit)) {
-            faulted_pool_name = p->get_name();
+            pool_id = i;
             break;
         }
     }
-    if (!faulted_pool_name) {
-        count = pool_count.load(std::memory_order_acquire);
-        for (int i = 0; i < count; ++i) {
-            Pool *p = active_pools[i].load(std::memory_order_acquire);
-            if (p && p->is_in_guard_zone(mem_hit)) {
-                faulted_pool_name = p->get_name();
-                break;
-            }
-        }
-    }
 
-    if (faulted_pool_name) {
-        const char msg1[] = "SIGSEGV for pool: \"";
-        const char msg2[] = "\"\n";
+    if (pool_id != -1) {
+        const char msg1[] = "SIGSEGV for pool with ID: ";
+        const char msg3[] = "\n";
         write(STDERR_FILENO, msg1, strlen(msg1));
-        write(STDERR_FILENO, faulted_pool_name, strlen(faulted_pool_name));
-        write(STDERR_FILENO, msg2, strlen(msg2));
+        int64_t msg2 = 0x0a30303030 | (pool_id / 1000) 
+                                 | (pool_id / 100 % 10) << 8 
+                                 | (pool_id / 10 % 10) << 16 
+                                 | (pool_id % 10) << 24;
+        write(STDERR_FILENO, reinterpret_cast<char *>(&msg2), 5);
+        write(STDERR_FILENO, msg3, strlen(msg3));
     }
 
     if (prev_handler.sa_handler == SIG_DFL) {
@@ -49,7 +37,27 @@ static void sigsegv_handler(int sig, siginfo_t *info, void *ucontext) {
     }
 }
 
-void register_sigsegv_handler() {
+void PoolRegistry::register_pool(BasePool* pool) {
+    for (int i = 0; i < MAX_POOLS; ++i) {
+        BasePool* expected = nullptr;
+        // nullptr -> pool
+        if (active_pools[i].compare_exchange_strong(expected, pool, std::memory_order_release))
+            return;
+    }
+    assert(false && "Too many pools");
+}
+
+void PoolRegistry::unregister_pool(BasePool* pool) {
+    for (int i = 0; i < MAX_POOLS; ++i) {
+        BasePool* expected = pool;
+        // pool -> nullptr
+        if (active_pools[i].compare_exchange_strong(expected, nullptr, std::memory_order_release))
+            return;
+    }
+    assert(false && "Pool not found");
+}
+
+void PoolRegistry::register_sigsegv_handler() {
     if (!handler_registered) {
         struct sigaction sa;
         sa.sa_flags = SA_SIGINFO;

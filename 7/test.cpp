@@ -87,14 +87,10 @@ static void test_std() {
     print_stats(start, finish, NUM_THREADS * N);
 }
 
-std::mutex mtx;
-static void thread_global_mutex(unsigned n, Pool& p) {
+static void thread_global_mutex(unsigned n, MutexedPool& p) {
     Node* list = nullptr;
     for (unsigned i = 0; i < n; i++) {
-        mtx.lock();
         Node* new_node = static_cast<Node*>(p.allocate(sizeof(Node)));
-        mtx.unlock();
-
         new_node->node_id = i;
         new_node->next = list;
         list = new_node;
@@ -105,7 +101,7 @@ static void test_global_mutex() {
     struct rusage start, finish;
     get_usage(start); {
         size_t total_capacity = NUM_THREADS * N * sizeof(Node);
-        Pool pool(total_capacity, sizeof(Node), "Global mutexed pool"); // Not really a global one, but we must destroy the full pool instead of single list
+        MutexedPool pool(total_capacity, sizeof(Node)); // Not really a global one, but we must destroy the full pool instead of single list
 
         vector<thread> threads;
         for (unsigned i = 0; i < NUM_THREADS; i++)
@@ -131,7 +127,7 @@ static void test_global_lockfree() {
     struct rusage start, finish;
     get_usage(start); {
         size_t total_capacity = NUM_THREADS * N * sizeof(Node);
-        LockFreePool pool(total_capacity, sizeof(Node), "Global lock-free pool"); // Same as for the previous pool
+        LockFreePool pool(total_capacity, sizeof(Node)); // Same as for the previous pool
 
         vector<thread> threads;
         for (unsigned i = 0; i < NUM_THREADS; i++)
@@ -144,9 +140,8 @@ static void test_global_lockfree() {
     print_stats(start, finish, NUM_THREADS * N);
 }
 
-static void thread_local_pool(unsigned n, int thread_id) {
-    string pool_name = "Thread-local pool " + to_string(thread_id);
-    Pool p(n * sizeof(Node), sizeof(Node), pool_name.c_str());
+static void thread_local_pool(unsigned n) {
+    Pool p(n * sizeof(Node), sizeof(Node));
 
     Node* list = nullptr;
     for (unsigned i = 0; i < n; i++) {
@@ -163,7 +158,7 @@ static void test_local_pools() {
 
     vector<thread> threads;
     for (unsigned i = 0; i < NUM_THREADS; i++)
-        threads.emplace_back(thread_local_pool, N, i);
+        threads.emplace_back(thread_local_pool, N);
     for (auto& t : threads)
         t.join();
 
@@ -172,7 +167,7 @@ static void test_local_pools() {
 }
 
 int main() {
-    register_sigsegv_handler();
+    PoolRegistry::register_sigsegv_handler();
 
     test_std();
     // Uncomment below to run other tests
@@ -181,8 +176,11 @@ int main() {
     // test_local_pools();
 
     // Uncomment below to check SIGSEGV works
-    // Pool pool(100 * sizeof(Node), sizeof(Node), "Doomed pool");
-    // create_list_using_pool(12345, pool);
+    // Pool pool(100 * sizeof(Node), sizeof(Node));
+    // Pool pool1(100 * sizeof(Node), sizeof(Node));
+    // Pool pool2(100 * sizeof(Node), sizeof(Node));
+    // Pool pool3(100 * sizeof(Node), sizeof(Node));
+    // create_list_using_pool(12345, pool3);
 
     return EXIT_SUCCESS;
 }
