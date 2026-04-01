@@ -21,11 +21,12 @@ static void sigsegv_handler(int sig, siginfo_t *info, void *ucontext) {
         const char msg3[] = "\n";
         write(STDERR_FILENO, msg1, strlen(msg1));
         int64_t msg2 = 0x0a30303030 | (pool_id / 1000) 
-                                 | (pool_id / 100 % 10) << 8 
-                                 | (pool_id / 10 % 10) << 16 
-                                 | (pool_id % 10) << 24;
+                                    | (pool_id / 100 % 10) << 8 
+                                    | (pool_id / 10 % 10) << 16 
+                                    | (pool_id % 10) << 24;
         write(STDERR_FILENO, reinterpret_cast<char *>(&msg2), 5);
         write(STDERR_FILENO, msg3, strlen(msg3));
+        _exit(EXIT_FAILURE);
     }
 
     if (prev_handler.sa_handler == SIG_DFL) {
