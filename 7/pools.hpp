@@ -10,11 +10,14 @@ public:
     char* base_addr;
     size_t total_size;
     size_t guard_size;
+    int pool_id;
 
     BasePool(size_t capacity, size_t max_alloc_size);
     ~BasePool();
 
-    bool is_in_guard_zone(void* addr) const;
+    bool is_in_guard_zone(void* addr) const {
+        return addr >= base_addr && addr < (base_addr + guard_size);
+    }
 };
 
 class Pool : public BasePool {

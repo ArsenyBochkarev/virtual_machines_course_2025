@@ -6,15 +6,7 @@ static struct sigaction prev_handler;
 
 static void sigsegv_handler(int sig, siginfo_t *info, void *ucontext) {
     char *mem_hit = static_cast<char *>(info->si_addr);
-    int pool_id = -1;
-
-    for (int i = 0; i < MAX_POOLS; ++i) {
-        BasePool *p = PoolRegistry::active_pools[i].load(std::memory_order_acquire);
-        if (p && p->is_in_guard_zone(mem_hit)) {
-            pool_id = i;
-            break;
-        }
-    }
+    int pool_id = PoolRegistry::getInstance().find_pool_id(mem_hit);
 
     if (pool_id != -1) {
         const char msg1[] = "SIGSEGV for pool with ID: ";
@@ -37,27 +29,44 @@ static void sigsegv_handler(int sig, siginfo_t *info, void *ucontext) {
     }
 }
 
-void PoolRegistry::register_pool(BasePool* pool) {
+int PoolRegistry::register_pool(char* guard_start, char* guard_end) {
+    std::lock_guard<std::mutex> lock(registry_mtx); // To ensure no race for pool_id happens
     for (int i = 0; i < MAX_POOLS; ++i) {
-        BasePool* expected = nullptr;
-        // nullptr -> pool
-        if (active_pools[i].compare_exchange_strong(expected, pool, std::memory_order_release))
-            return;
+        bool expected = false;
+        // Lock first non-true slot
+        if (!active_pools[i].load(std::memory_order_relaxed)) {
+            guard_starts[i].store(guard_start, std::memory_order_release);
+            guard_ends[i].store(guard_end, std::memory_order_release);
+            active_pools[i].store(true, std::memory_order_release);
+            return i; // pool_id
+        }
     }
     assert(false && "Too many pools");
 }
 
-void PoolRegistry::unregister_pool(BasePool* pool) {
+void PoolRegistry::unregister_pool(int id) {
+    assert(id >= 0 && id < MAX_POOLS && "Ill-formed pool ID");
+    active_pools[id].store(false, std::memory_order_release);
+}
+
+int PoolRegistry::find_pool_id(char *addr) {
     for (int i = 0; i < MAX_POOLS; ++i) {
-        BasePool* expected = pool;
-        // pool -> nullptr
-        if (active_pools[i].compare_exchange_strong(expected, nullptr, std::memory_order_release))
-            return;
+        if (active_pools[i].load(std::memory_order_acquire)) {
+            char *start = guard_starts[i].load(std::memory_order_acquire);
+            char *end = guard_ends[i].load(std::memory_order_acquire);
+            if (addr >= start && addr < end)
+                // We don't care if here active_pools[i].load == false,
+                // we've found memory that got hit by pool of this guard,
+                // so return it as we should
+                return i;
+        }
     }
-    assert(false && "Pool not found");
+    return -1;
 }
 
 PoolRegistry::PoolRegistry() {
+    for (int i = 0; i < MAX_POOLS; ++i)
+        active_pools[i].store(false, std::memory_order_relaxed);
     struct sigaction sa;
     sa.sa_flags = SA_SIGINFO;
     sa.sa_sigaction = sigsegv_handler;

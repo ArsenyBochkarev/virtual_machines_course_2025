@@ -21,11 +21,16 @@ constexpr int MAX_POOLS = 128;
 class PoolRegistry {
     PoolRegistry();
     ~PoolRegistry() = default;
+
+    std::mutex registry_mtx;
+    std::atomic<bool> active_pools[MAX_POOLS];
+    std::atomic<char *> guard_starts[MAX_POOLS];
+    std::atomic<char *> guard_ends[MAX_POOLS];
 public:
-    static inline std::atomic<BasePool *> active_pools[MAX_POOLS];
     static PoolRegistry& getInstance();
-    void register_pool(BasePool *p);
-    void unregister_pool(BasePool *p);
+    int register_pool(char* guard_start, char* guard_end);
+    void unregister_pool(int id);
+    int find_pool_id(char *addr);
 };
 
 #endif // SIGSEGV_HANDLER_HPP
