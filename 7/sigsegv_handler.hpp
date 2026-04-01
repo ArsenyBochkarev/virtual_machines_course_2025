@@ -22,8 +22,6 @@ class PoolRegistry {
     PoolRegistry();
     ~PoolRegistry() = default;
 
-    std::mutex registry_mtx;
-    std::atomic<bool> active_pools[MAX_POOLS];
     std::atomic<char *> guard_starts[MAX_POOLS];
     std::atomic<char *> guard_ends[MAX_POOLS];
 public:
