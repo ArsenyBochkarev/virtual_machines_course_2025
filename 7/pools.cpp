@@ -29,10 +29,10 @@ BasePool::BasePool(size_t capacity, size_t max_alloc_size) {
         exit(EXIT_FAILURE);
     }
 
-    PoolRegistry::register_pool(this);
+    PoolRegistry::getInstance().register_pool(this);
 }
 BasePool::~BasePool() {
-    PoolRegistry::unregister_pool(this);
+    PoolRegistry::getInstance().unregister_pool(this);
     munmap(base_addr, total_size);
 }
 bool BasePool::is_in_guard_zone(void* addr) const {

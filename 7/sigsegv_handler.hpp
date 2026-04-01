@@ -19,11 +19,13 @@
 
 constexpr int MAX_POOLS = 128;
 class PoolRegistry {
+    PoolRegistry();
+    ~PoolRegistry() = default;
 public:
     static inline std::atomic<BasePool *> active_pools[MAX_POOLS];
-    static void register_pool(BasePool *p);
-    static void unregister_pool(BasePool *p);
-    static void register_sigsegv_handler();
+    static PoolRegistry& getInstance();
+    void register_pool(BasePool *p);
+    void unregister_pool(BasePool *p);
 };
 
 #endif // SIGSEGV_HANDLER_HPP

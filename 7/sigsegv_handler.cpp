@@ -3,7 +3,6 @@
 
 
 static struct sigaction prev_handler;
-static bool handler_registered = false;
 
 static void sigsegv_handler(int sig, siginfo_t *info, void *ucontext) {
     char *mem_hit = static_cast<char *>(info->si_addr);
@@ -57,13 +56,15 @@ void PoolRegistry::unregister_pool(BasePool* pool) {
     assert(false && "Pool not found");
 }
 
-void PoolRegistry::register_sigsegv_handler() {
-    if (!handler_registered) {
-        struct sigaction sa;
-        sa.sa_flags = SA_SIGINFO;
-        sa.sa_sigaction = sigsegv_handler;
-        sigemptyset(&sa.sa_mask);
-        assert(sigaction(SIGSEGV, &sa, &prev_handler) == 0);
-        handler_registered = true;
-    }
+PoolRegistry::PoolRegistry() {
+    struct sigaction sa;
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = sigsegv_handler;
+    sigemptyset(&sa.sa_mask);
+    assert(sigaction(SIGSEGV, &sa, &prev_handler) == 0);
+}
+
+PoolRegistry& PoolRegistry::getInstance() {
+    static PoolRegistry instance;
+    return instance;
 }

@@ -142,14 +142,7 @@ static void test_global_lockfree() {
 
 static void thread_local_pool(unsigned n) {
     Pool p(n * sizeof(Node), sizeof(Node));
-
-    Node* list = nullptr;
-    for (unsigned i = 0; i < n; i++) {
-        Node* new_node = static_cast<Node*>(p.allocate(sizeof(Node)));
-        new_node->node_id = i;
-        new_node->next = list;
-        list = new_node;
-    }
+    create_list_using_pool(n, p);
 }
 static void test_local_pools() {
     cout << "Thread-local pools:\n";
@@ -167,8 +160,6 @@ static void test_local_pools() {
 }
 
 int main() {
-    PoolRegistry::register_sigsegv_handler();
-
     test_std();
     // Uncomment below to run other tests
     // test_global_mutex();
