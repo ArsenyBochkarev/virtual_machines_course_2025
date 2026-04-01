@@ -27,7 +27,10 @@ class PoolRegistry {
     std::atomic<char *> guard_starts[MAX_POOLS];
     std::atomic<char *> guard_ends[MAX_POOLS];
 public:
-    static PoolRegistry& getInstance();
+    static inline PoolRegistry& getInstance() {
+        static PoolRegistry instance;
+        return instance;
+    }
     int register_pool(char* guard_start, char* guard_end);
     void unregister_pool(int id);
     int find_pool_id(char *addr);

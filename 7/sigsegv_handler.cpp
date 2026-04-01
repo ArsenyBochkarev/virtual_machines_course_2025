@@ -73,8 +73,3 @@ PoolRegistry::PoolRegistry() {
     sigemptyset(&sa.sa_mask);
     assert(sigaction(SIGSEGV, &sa, &prev_handler) == 0);
 }
-
-PoolRegistry& PoolRegistry::getInstance() {
-    static PoolRegistry instance;
-    return instance;
-}
