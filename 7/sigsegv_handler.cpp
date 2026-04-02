@@ -57,10 +57,6 @@ int PoolRegistry::find_pool_id(char *addr) {
 }
 
 PoolRegistry::PoolRegistry() {
-    for (int i = 0; i < MAX_POOLS; ++i) {
-        guard_starts[i].store(nullptr, std::memory_order_relaxed);
-        guard_ends[i].store(nullptr, std::memory_order_relaxed);
-    }
     struct sigaction sa;
     sa.sa_flags = SA_SIGINFO;
     sa.sa_sigaction = sigsegv_handler;
