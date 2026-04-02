@@ -15,7 +15,7 @@ BasePool::BasePool(size_t capacity, size_t max_alloc_size) {
     auto round_up = [](size_t n) -> size_t {
         return (n + page_size - 1) & ~(page_size - 1);
     };
-    guard_size = round_up(max_alloc_size);
+    size_t guard_size = round_up(max_alloc_size);
     size_t rounded_capacity = round_up(capacity);
 
     total_size = rounded_capacity + guard_size;
