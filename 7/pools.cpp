@@ -35,11 +35,3 @@ BasePool::~BasePool() {
     PoolRegistry::getInstance().unregister_pool(pool_id);
     munmap(base_addr, total_size);
 }
-
-Pool::Pool(size_t capacity, size_t max_alloc_size) : BasePool(capacity, max_alloc_size) {
-    first_free = base_addr + total_size;
-}
-LockFreePool::LockFreePool(size_t capacity, size_t max_alloc_size) : BasePool(capacity, max_alloc_size) {
-    first_free.store(base_addr + total_size, std::memory_order_relaxed);
-}
-MutexedPool::MutexedPool(size_t capacity, size_t max_alloc_size) : Pool(capacity, max_alloc_size) {}
