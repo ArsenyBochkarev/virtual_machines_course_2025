@@ -15,7 +15,7 @@ Please note that the test should be run one at a time
 
 | Allocator             | Time (usec) | Memory used (bytes) | Overhead |
 | --------------------- | ----------- | ------------------- | -------- |
-| Standard Allocator    | 7923194     | 5121101824          | 50.011%  |
-| Global mutexed pool   | 27990903    | 2561089536          | 0.043%   |
-| Global lock-free pool | 30559170    | 2561097728          | 0.043%   |
-| Thread-local pools    | 214924      | 1699991552          | -50.589% |
+| Standard Allocator    | 8298970     | 5120040960          | 50.000%  |
+| Global mutexed pool   | 27807480    | 2559938560          | -0.002%  |
+| Global lock-free pool | 33529781    | 2560036864          | 0.001%   |
+| Thread-local pools    | 171139      | 1654345728          | -54.744% |
