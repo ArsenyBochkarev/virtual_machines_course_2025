@@ -25,7 +25,7 @@ class PoolRegistry {
     std::atomic<char *> guard_starts[MAX_POOLS];
     std::atomic<char *> guard_ends[MAX_POOLS];
 public:
-    static inline PoolRegistry& getInstance() {
+    static PoolRegistry& getInstance() {
         static PoolRegistry instance;
         return instance;
     }
