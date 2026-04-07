@@ -24,13 +24,6 @@ public:
 #ifdef STRING_PTR_DEBUG
 private:
 #endif
-    void set_unique_bit(bool unique) const noexcept {
-        if (unique)
-            raw |= UNIQUE_BIT;
-        else
-            raw &= PTR_MASK;
-    }
-
     char *get_ptr() const noexcept {
         return reinterpret_cast<char *>(raw & PTR_MASK); // Clear uniqueness tag before returning ptr
     }
@@ -59,8 +52,8 @@ public:
 
     // Both become non-unique
     string_ptr(const string_ptr& other) noexcept {
-        set_ptr(other.get_ptr(), false);
-        other.set_unique_bit(false);
+        raw = other.raw & PTR_MASK;
+        other.raw = raw;
     }
     string_ptr& operator=(const string_ptr& other) noexcept {
         if (this == &other)
