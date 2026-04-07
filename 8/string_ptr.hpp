@@ -52,9 +52,9 @@ public:
             set_ptr(strdup(str), true); // strdup guarantees lowest bit is free to use
     }
     string_ptr& operator=(const char *str) {
-        string_ptr tmp(str); // This will properly deallocate existing string (if needed)
+        string_ptr tmp(str);
         swap(tmp);
-        return *this;
+        return *this; // Existing string will be deallocated (if needed) by the end of this scope
     }
 
     // Both become non-unique
