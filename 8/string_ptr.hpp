@@ -13,7 +13,7 @@ static constexpr uintptr_t UNIQUE_BIT = 1;
 static constexpr uintptr_t PTR_MASK = ~UNIQUE_BIT;
 
 class string_ptr {
-    uintptr_t raw; // Rightmost bit will be used as uniqueness tag
+    mutable uintptr_t raw; // Rightmost bit will be used as uniqueness tag
 
 #ifdef STRING_PTR_DEBUG
 public:
@@ -24,17 +24,17 @@ public:
 #ifdef STRING_PTR_DEBUG
 private:
 #endif
-    void set_unique_bit(bool unique) {
+    void set_unique_bit(bool unique) const noexcept {
         if (unique)
             raw |= UNIQUE_BIT;
         else
             raw &= PTR_MASK;
     }
 
-    char *get_ptr() const {
+    char *get_ptr() const noexcept {
         return reinterpret_cast<char *>(raw & PTR_MASK); // Clear uniqueness tag before returning ptr
     }
-    void set_ptr(const char *ptr, bool unique) {
+    void set_ptr(const char *ptr, bool unique) const noexcept {
         uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
         raw = p | unique;
     }
@@ -58,11 +58,11 @@ public:
     }
 
     // Both become non-unique
-    string_ptr(string_ptr& other) {
+    string_ptr(const string_ptr& other) noexcept {
         set_ptr(other.get_ptr(), false);
         other.set_unique_bit(false);
     }
-    string_ptr& operator=(string_ptr& other) {
+    string_ptr& operator=(const string_ptr& other) noexcept {
         if (this == &other)
             return *this;
         string_ptr tmp(other);
@@ -71,11 +71,11 @@ public:
     }
 
     // Moving preserves uniqueness
-    string_ptr(string_ptr&& other) {
+    string_ptr(string_ptr&& other) noexcept {
         raw = other.raw;
         other.set_ptr(nullptr, false);
     }
-    string_ptr& operator=(string_ptr&& other) {
+    string_ptr& operator=(string_ptr&& other) noexcept {
         if (this == &other)
             return *this;
         string_ptr tmp(std::move(other));
@@ -92,11 +92,11 @@ public:
         }
     }
 
-    void swap(string_ptr& other) noexcept {
+    void swap(string_ptr& other) const noexcept {
         std::swap(raw, other.raw);
     }
 
-    const char *operator*() const {
+    const char *operator*() const noexcept {
         char *res = get_ptr();
         return (res ? res : "");
     }

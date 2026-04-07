@@ -141,9 +141,20 @@ void test_vector_usage() {
 
 
     string_ptr elem1 = "some str";
-    vec.emplace_back(elem1); // We're unable to use push_back here since it wants constructor to take `const string_ptr&`
-    vec.emplace_back(string_ptr("other"));
-    vec.emplace_back(string_ptr("this is the last item in this vector"));
+    vec.push_back(elem1);
+    vec.push_back(string_ptr("other"));
+    vec.push_back(string_ptr("this is the last item in this vector"));
+
+    for(const auto& item : vec)
+        std::cout << item << "\n";
+    vec.clear();
+    // "some str" here should not be freed
+    // All other string_ptrs from vec should be freed
+
+
+    vec.emplace_back(elem1);
+    vec.emplace_back(string_ptr("emplace back was used in this test"));
+    vec.emplace_back(string_ptr("last item"));
 
     for(const auto& item : vec)
         std::cout << item << "\n";
