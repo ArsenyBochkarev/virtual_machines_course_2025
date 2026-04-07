@@ -20,7 +20,7 @@ void test(std::string test_name, std::function<void()> test_func) {
 void test_initialization() {
     string_ptr empty_ptr;
     assert(!empty_ptr.is_unique()); // NULL is not unique
-    assert(strcmp(*empty_ptr, "") == 0);
+    assert(strcmp((*empty_ptr ? *empty_ptr : ""), "") == 0);
 
     string_ptr a("hello");
     assert(a.is_unique());
@@ -57,7 +57,7 @@ void test_move_semantics() {
     assert(b.is_unique());
     assert(!a.is_unique()); // `a` is now NULL (non-unique)
     assert(strcmp(*b, "move me") == 0);
-    assert(strcmp(*a, "") == 0);
+    assert(strcmp((*a ? *a : ""), "") == 0);
 
     string_ptr c("target");
     // "target" should be freed

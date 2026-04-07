@@ -97,12 +97,11 @@ public:
     }
 
     const char *operator*() const noexcept {
-        char *res = get_ptr();
-        return (res ? res : "");
+        return get_ptr();
     }
 
     friend std::ostream& operator<<(std::ostream& os, const string_ptr& rc) {
-        return os << (rc.is_unique() ? "unique " : "non-unique ") << "string: \"" << *rc << "\"";
+        return os << (rc.is_unique() ? "unique " : "non-unique ") << "string: \"" << (rc.get_ptr() ? *rc : "") << "\"";
     }
 };
 
