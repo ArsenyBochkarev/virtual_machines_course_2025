@@ -10,11 +10,11 @@
 #include <setjmp.h>
 
 
-static inline std::optional<uintptr_t> remembered_addr = std::nullopt;
-static inline struct sigaction prev_sigsegv_handler;
-static inline struct sigaction prev_sigbus_handler;
-static inline sigjmp_buf env;
-static void sig_handler(int sig, siginfo_t *info, void *ucontext) {
+inline std::optional<uintptr_t> remembered_addr = std::nullopt;
+inline struct sigaction prev_sigsegv_handler;
+inline struct sigaction prev_sigbus_handler;
+inline sigjmp_buf env;
+inline void sig_handler(int sig, siginfo_t *info, void *ucontext) {
     uintptr_t mem_hit = reinterpret_cast<uintptr_t>(info->si_addr);
     bool is_sigsegv = (sig == SIGSEGV);
 
@@ -39,14 +39,14 @@ static void sig_handler(int sig, siginfo_t *info, void *ucontext) {
     }
 }
 
-static bool is_canonical(uintptr_t addr) {
+inline bool is_canonical(uintptr_t addr) {
     int64_t bit47 = (static_cast<int64_t>(addr) >> 47) & 1;
     // Others should be the same
     int64_t high_bits = static_cast<int64_t>(addr) >> 48;
     return (!bit47) ? (!high_bits) : (high_bits == 0xFFFF);
 }
 
-static std::optional<uint8_t> safe_read_uint8(const uint8_t *p) {
+inline std::optional<uint8_t> safe_read_uint8(const uint8_t *p) {
     uintptr_t addr = reinterpret_cast<uintptr_t>(p);
     // We're unable to detect address in sig_handler if address isn't canonical
     if (!is_canonical(addr))
