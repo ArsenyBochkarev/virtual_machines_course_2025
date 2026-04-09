@@ -39,7 +39,19 @@ static void sig_handler(int sig, siginfo_t *info, void *ucontext) {
     }
 }
 
+static bool is_canonical(uintptr_t addr) {
+    int64_t bit47 = (static_cast<int64_t>(addr) >> 47) & 1;
+    // Others should be the same
+    int64_t high_bits = static_cast<int64_t>(addr) >> 48;
+    return (!bit47) ? (!high_bits) : (high_bits == 0xFFFF);
+}
+
 static std::optional<uint8_t> safe_read_uint8(const uint8_t *p) {
+    uintptr_t addr = reinterpret_cast<uintptr_t>(p);
+    // We're unable to detect address in sig_handler if address isn't canonical
+    if (!is_canonical(addr))
+        return std::nullopt;
+
     struct sigaction sigsegv_action;
     sigsegv_action.sa_flags = SA_SIGINFO; 
     sigsegv_action.sa_sigaction = sig_handler;
@@ -47,7 +59,7 @@ static std::optional<uint8_t> safe_read_uint8(const uint8_t *p) {
     if (sigaction(SIGSEGV, &sigsegv_action, &prev_sigsegv_handler) != 0 || sigaction(SIGBUS, &sigsegv_action, &prev_sigbus_handler))
         return std::nullopt;
 
-    remembered_addr = reinterpret_cast<uintptr_t>(p);
+    remembered_addr = addr;
     std::optional<uint8_t> result = std::nullopt;
     if (sigsetjmp(env, 1) == 0)
         result = *p;

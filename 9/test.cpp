@@ -28,6 +28,17 @@ void simple_tests() {
     // Two signal handlers should be called
 }
 
+void non_canonical_addresses_test() {
+    assert(safe_read_uint8(reinterpret_cast<const uint8_t *>(0x0000FFFF0000FFFF0000)) == std::nullopt);
+    assert(safe_read_uint8(reinterpret_cast<const uint8_t *>(0x033FF00000000000)) == std::nullopt);
+    // No signal handlers should be called
+}
+
+
+#ifndef SA_RESTORER
+#define SA_RESTORER 0x04000000
+#endif
+
 void handlers_restore_test() {
     // Save current handlers
     struct sigaction old_segv, old_bus;
@@ -42,9 +53,9 @@ void handlers_restore_test() {
     sigaction(SIGSEGV, nullptr, &new_segv);
     sigaction(SIGBUS, nullptr, &new_bus);
     assert(new_segv.sa_sigaction == old_segv.sa_sigaction);
-    assert(new_segv.sa_flags == old_segv.sa_flags);
+    assert((new_segv.sa_flags & ~SA_RESTORER) == (old_segv.sa_flags & ~SA_RESTORER));
     assert(new_bus.sa_sigaction == old_bus.sa_sigaction);
-    assert(new_bus.sa_flags == old_bus.sa_flags);
+    assert((new_bus.sa_flags & ~SA_RESTORER) == (old_bus.sa_flags & ~SA_RESTORER));
     // No signal should fire in this test
 }
 
@@ -89,6 +100,7 @@ void external_handler_test() {
 
 int main() {
     test("simple_tests", simple_tests);
+    test("non_canonical_addresses_test", non_canonical_addresses_test);
     test("handlers_restore_test", handlers_restore_test);
     test("external_handler_test", external_handler_test);
     return 0;
