@@ -10,10 +10,10 @@
 #include <setjmp.h>
 
 
-static std::optional<uintptr_t> remembered_addr = std::nullopt;
-static struct sigaction prev_sigsegv_handler;
-static struct sigaction prev_sigbus_handler;
-static sigjmp_buf env;
+static inline std::optional<uintptr_t> remembered_addr = std::nullopt;
+static inline struct sigaction prev_sigsegv_handler;
+static inline struct sigaction prev_sigbus_handler;
+static inline sigjmp_buf env;
 static void sig_handler(int sig, siginfo_t *info, void *ucontext) {
     uintptr_t mem_hit = reinterpret_cast<uintptr_t>(info->si_addr);
     bool is_sigsegv = (sig == SIGSEGV);
@@ -39,7 +39,7 @@ static void sig_handler(int sig, siginfo_t *info, void *ucontext) {
     }
 }
 
-std::optional<uint8_t> safe_read_uint8(const uint8_t *p) {
+static std::optional<uint8_t> safe_read_uint8(const uint8_t *p) {
     struct sigaction sigsegv_action;
     sigsegv_action.sa_flags = SA_SIGINFO; 
     sigsegv_action.sa_sigaction = sig_handler;

@@ -1,6 +1,6 @@
 .PHONY: test clean
 
-CC_FLAGS=-O2 -Wno-unused-result
+CC_FLAGS=-O2 -Wno-unused-result -std=c++17
 
 test:
 	g++ ${CC_FLAGS} test.cpp -o test.out
