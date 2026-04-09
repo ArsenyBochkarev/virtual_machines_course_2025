@@ -1,12 +1,12 @@
 #include "safe_read_byte.hpp"
 
 
-std::optional<uintptr_t> remembered_addr = std::nullopt;
-struct sigaction prev_sigsegv_handler;
-struct sigaction prev_sigbus_handler;
-sigjmp_buf env;
+static std::optional<uintptr_t> remembered_addr = std::nullopt;
+static struct sigaction prev_sigsegv_handler;
+static struct sigaction prev_sigbus_handler;
+static sigjmp_buf env;
 
-void sig_handler(int sig, siginfo_t *info, void *ucontext) {
+static void sig_handler(int sig, siginfo_t *info, void *ucontext) {
     uintptr_t mem_hit = reinterpret_cast<uintptr_t>(info->si_addr);
     bool is_sigsegv = (sig == SIGSEGV);
 
@@ -29,7 +29,7 @@ void sig_handler(int sig, siginfo_t *info, void *ucontext) {
     }
 }
 
-bool is_canonical(uintptr_t addr) {
+static bool is_canonical(uintptr_t addr) {
     int64_t saddr = static_cast<int64_t>(addr);
     // Others should be the same
     return (saddr << 16) >> 16 == saddr;
