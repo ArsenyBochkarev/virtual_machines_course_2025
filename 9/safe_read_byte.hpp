@@ -40,10 +40,9 @@ inline void sig_handler(int sig, siginfo_t *info, void *ucontext) {
 }
 
 inline bool is_canonical(uintptr_t addr) {
-    int64_t bit47 = (static_cast<int64_t>(addr) >> 47) & 1;
+    int64_t saddr = static_cast<int64_t>(addr);
     // Others should be the same
-    int64_t high_bits = static_cast<int64_t>(addr) >> 48;
-    return (!bit47) ? (!high_bits) : (high_bits == 0xFFFF);
+    return (saddr << 16) >> 16 == saddr;
 }
 
 inline std::optional<uint8_t> safe_read_uint8(const uint8_t *p) {
