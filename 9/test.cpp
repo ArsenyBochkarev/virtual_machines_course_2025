@@ -4,9 +4,7 @@
 #include <string>
 #include <sys/mman.h>
 
-#define SAFE_READ_BYTE_DEBUG
 #include "safe_read_byte.hpp"
-#undef SAFE_READ_BYTE_DEBUG
 
 
 void test(std::string test_name, std::function<void()> test_func) {
